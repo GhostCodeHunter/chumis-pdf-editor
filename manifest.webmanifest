@@ -1,0 +1,26 @@
+{
+  "id": "./app.html",
+  "name": "Chumi's PDF Editor",
+  "short_name": "Chumi PDF",
+  "description": "Edit, OCR, merge, convert and verify PDFs privately in your browser.",
+  "start_url": "./app.html?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#f5f5f5",
+  "theme_color": "#d31510",
+  "categories": ["productivity", "utilities", "business"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "file_handlers": [
+    { "action": "./app.html", "accept": { "application/pdf": [".pdf"] } }
+  ],
+  "shortcuts": [
+    { "name": "Open a PDF", "url": "./app.html?source=shortcut", "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

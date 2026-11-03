@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Disclaimer — Chumi&#x27;s PDF Editor</title>
+<meta name="description" content="Important limits of Chumi&#x27;s PDF Editor: verification results, digital-signature validation, redaction, OCR and conversion.">
+<meta name="robots" content="index,follow">
+<meta name="theme-color" content="#d31510">
+<meta name="author" content="Chumi">
+<meta property="og:type" content="website"><meta property="og:site_name" content="Chumi&#x27;s PDF Editor"><meta property="og:title" content="Disclaimer — Chumi&#x27;s PDF Editor"><meta property="og:description" content="Important limits of Chumi&#x27;s PDF Editor: verification results, digital-signature validation, redaction, OCR and conversion."><meta property="og:image" content="assets/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="css/theme.css"><link rel="stylesheet" href="css/components.css"><link rel="stylesheet" href="css/site.css">
+<script>document.documentElement.classList.add('js')</script>
+</head>
+<body class="site legal-page">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-head" id="top"><div class="wrap">
+  <a class="site-brand" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><use href="assets/logo.svg#mark"/></svg><span>Chumi&#x27;s PDF Editor</span></a>
+  <nav class="site-nav" aria-label="Main"><a href="index.html#features">Features</a><a href="index.html#verify">Verify documents</a><a href="index.html#privacy">Privacy</a><a href="index.html#install">Install</a><a href="index.html#faq">FAQ</a></nav>
+  <div class="head-cta"><span data-install></span><a class="btn btn-brand" href="app.html"><span data-icon="pdf" data-size="18"></span><span>Open the editor</span></a></div>
+  <button class="btn btn-ghost btn-icon menu-btn" type="button" aria-label="Menu" aria-expanded="false" data-menu><span data-icon="menu" data-size="22"></span></button>
+</div></header>
+<main id="main">
+<article class="legal"><div class="wrap">
+<a class="crumb" href="index.html"><span data-icon="chev-left" data-size="16"></span> Back to Chumi&#x27;s PDF Editor</a>
+<h1>Disclaimer</h1><p class="meta">Last updated: 3 November 2026</p>
+
+<div class="callout warn"><strong>Please read this before relying on any result.</strong> Chumi&#x27;s PDF Editor helps you inspect and edit documents. It is not an official verification service and is not connected to any government authority.</div>
+
+<h2>1. Government-document verification</h2>
+<ul>
+<li><strong>Offline checks only.</strong> The tool checks number formats, published checksums (for example Aadhaar's Verhoeff check and the GSTIN check character), structural rules (PAN holder type, CIN fields) and consistency between values found in the same document.</li>
+<li><strong>A passing result does not prove a number or document is genuine.</strong> A number can have a valid format and checksum without ever having been issued. Only the issuing authority can confirm that — use the official-site button shown next to each result (UIDAI, Income Tax e-Filing, GST portal, MCA, Udyam).</li>
+<li><strong>A failing result can be a reading error.</strong> Text is read from the PDF or by OCR and may be wrong, especially on scans.</li>
+<li><strong>Not a KYC or compliance tool.</strong> Do not use it as the sole basis for onboarding, lending, tax or legal decisions. Entities that collect or store Aadhaar numbers must follow the Aadhaar Act, UIDAI rules and other applicable law.</li>
+<li>No affiliation: Chumi&#x27;s PDF Editor is not affiliated with UIDAI, the Income Tax Department, GSTN, the Ministry of Corporate Affairs, the Controller of Certifying Authorities or any other authority.</li>
+</ul>
+
+<h2>2. Digital-signature validation</h2>
+<ul>
+<li>The validator recomputes the signed fingerprint of the document and checks the signer's RSA signature. If either fails, the document or signature was changed.</li>
+<li>It builds the certificate chain from the file. A signature is shown as <strong>valid</strong> only when the chain ends at a certificate that <em>you</em> have chosen to trust. Importing a certificate is your decision — confirm its thumbprint with the issuer first.</li>
+<li><strong>Not checked:</strong> certificate revocation (CRL/OCSP), trusted timestamps, long-term-validation data, and whether later changes were permitted by the signer.</li>
+<li>Whether an electronic signature is legally valid depends on the law, the certifying authority and the circumstances. This tool gives no legal opinion.</li>
+</ul>
+
+<h2>3. Editing and redaction</h2>
+<ul>
+<li>“Edit text” places new text over the original and covers the old text. The original text may still exist underneath (it can be copied or extracted). White-out has the same limitation.</li>
+<li>“Redact” permanently flattens the page into a picture with black boxes burned in, so covered text and images are removed from that page. <strong>Always reopen the saved file and confirm</strong> the information is really gone before sharing it. Hidden data such as metadata should be removed separately (Document properties → Remove all).</li>
+<li>Editing a signed document breaks its signature by design.</li>
+</ul>
+
+<h2>4. OCR and conversion</h2>
+<p><strong>Fonts.</strong> Text added in Latin-script fonts is embedded as live, selectable text. Indian-language fonts, and any character a chosen font does not contain, are saved as a picture of the text (accurate to look at, but not selectable or searchable).</p>
+<p>OCR accuracy depends on scan quality, language and fonts. Conversions to Word, Excel, PowerPoint, HTML and Markdown rebuild content from text positions and may change layout, fonts, tables and images. Review every result.</p>
+
+<h2>5. Unsupported features</h2>
+<p>The browser version does not create password-protected/encrypted PDFs, sign with a certificate or USB token, or design interactive forms.</p>
+
+<h2>6. No professional advice</h2>
+<p>Nothing in the app or on this site is legal, tax, financial or compliance advice. Consult a qualified professional where it matters.</p>
+
+</div></article>
+</main>
+<footer class="site-foot"><div class="wrap">
+  <div class="foot-grid">
+    <div><div class="foot-brand"><svg viewBox="0 0 512 512" aria-hidden="true"><use href="assets/logo.svg#mark"/></svg>Chumi&#x27;s PDF Editor</div><p>Edit, OCR, merge, convert, sign and verify PDFs — privately, in your browser.</p></div>
+    <div><h4>Product</h4><ul><li><a href="app.html">Open the editor</a></li><li><a href="index.html#features">Features</a></li><li><a href="index.html#verify">Verify documents</a></li><li><a href="index.html#install">Install on desktop</a></li><li><a href="index.html#faq">FAQ</a></li></ul></div>
+    <div><h4>Legal</h4><ul><li><a href="privacy.html">Privacy Policy</a></li><li><a href="terms.html">Terms of Use</a></li><li><a href="disclaimer.html">Disclaimer</a></li><li><a href="licenses.html">Open-source licences</a></li><li data-repo-li hidden><a data-repo href="#" rel="noopener">Source code &amp; support</a></li></ul></div>
+  </div>
+  <div class="foot-legal">
+    <span>© <span data-year>2026</span> Chumi. All rights reserved. The source code is released under the MIT Licence; third-party components keep their own licences.</span>
+    <span>Chumi&#x27;s PDF Editor is an independent project. It is not affiliated with, endorsed by or sponsored by Adobe Inc., the Unique Identification Authority of India (UIDAI), the Income Tax Department, the Goods and Services Tax Network (GSTN), the Ministry of Corporate Affairs, the Controller of Certifying Authorities or any other government body. Adobe and Acrobat are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. Aadhaar, PAN, GSTIN, CIN and other names are used only to describe the documents this tool can read and belong to their respective owners.</span>
+    <span>Verification results are informational only — see the <a href="disclaimer.html">Disclaimer</a>.</span>
+  </div>
+</div></footer>
+<div id="toasts" aria-live="polite"></div>
+<script type="module" src="js/landing.js"></script>
+</body>
+</html>

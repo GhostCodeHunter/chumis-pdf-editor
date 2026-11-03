@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chumi's PDF Editor</title>
+<meta name="description" content="Edit, OCR, merge, convert and verify PDFs privately in your browser. Free, no sign-up, nothing is uploaded.">
+<meta name="theme-color" content="#d31510">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="css/theme.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/app.css">
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <a class="brand" href="index.html" title="About Chumi's PDF Editor">
+      <svg viewBox="0 0 512 512" aria-hidden="true"><use href="assets/logo.svg#mark"/></svg>
+      <span id="brand-name">Chumi's PDF Editor</span>
+    </a>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Open documents"></div>
+    <div class="topbar-actions">
+      <span id="top-install"></span>
+      <button class="btn btn-secondary" id="btn-open" type="button"></button>
+      <button class="btn btn-primary" id="btn-download" type="button" hidden></button>
+    </div>
+  </header>
+  <main class="views" id="views">
+    <section class="view" id="view-home"></section>
+    <section class="view" id="view-tools" hidden></section>
+  </main>
+</div>
+<div id="drop-overlay" aria-hidden="true">Drop files to open them</div>
+<div id="toasts" aria-live="polite"></div>
+<noscript><p style="padding:24px">Chumi's PDF Editor needs JavaScript. Everything runs in your browser; nothing is uploaded.</p></noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

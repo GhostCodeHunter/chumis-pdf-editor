@@ -1,0 +1,74 @@
+/* Pagewise PDF — design tokens. Every colour, size and radius used by app.css comes from here. */
+:root {
+  --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace;
+
+  /* surfaces */
+  --c-canvas: #e9e9e9;       /* behind the pages */
+  --c-bg: #f5f5f5;           /* app background */
+  --c-surface: #ffffff;
+  --c-surface-2: #f8f8f8;
+  --c-hover: #efefef;
+  --c-pressed: #e4e4e4;
+  --c-border: #dcdcdc;
+  --c-border-strong: #b4b4b4;
+
+  /* text */
+  --c-text: #2c2c2c;
+  --c-text-2: #5c5c5c;
+  --c-text-3: #8a8a8a;
+  --c-on-accent: #ffffff;
+
+  /* brand + accent */
+  --c-brand: #d31510;
+  --c-accent: #1473e6;
+  --c-accent-hover: #0d66d0;
+  --c-accent-press: #0a58b4;
+  --c-accent-bg: #e8f1fd;
+  --c-accent-border: #9ec5f6;
+
+  /* status */
+  --c-danger: #d31510;
+  --c-danger-bg: #fdeceb;
+  --c-success: #0f7a55;
+  --c-success-bg: #e6f5ee;
+  --c-warn: #a35a00;
+  --c-warn-bg: #fff4e0;
+
+  /* scale */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 14px; --fs-xl: 18px; --fs-2xl: 26px; --fs-3xl: 34px;
+  --h-topbar: 48px; --h-toolbar: 44px; --h-control: 32px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.14);
+  --shadow-2: 0 4px 16px rgba(0,0,0,.18);
+  --shadow-page: 0 1px 4px rgba(0,0,0,.28);
+  --focus: 0 0 0 2px #fff, 0 0 0 4px var(--c-accent);
+
+  /* motion — durations by purpose; only transform/opacity/colour are animated */
+  --dur-1: 90ms;    /* hover, press */
+  --dur-2: 160ms;   /* small state changes, menus */
+  --dur-3: 240ms;   /* dialogs, panels, view changes */
+  --dur-4: 420ms;   /* entrances, hero */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-in: cubic-bezier(.5, 0, .75, 0);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.4, .64, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 1ms; --dur-2: 1ms; --dur-3: 1ms; --dur-4: 1ms; }
+  *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; transition-delay: 0ms !important; scroll-behavior: auto !important; }
+}
+
+/* shared keyframes */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+@keyframes slide-in-right { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(24px); } }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
