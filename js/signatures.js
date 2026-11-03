@@ -25,6 +25,8 @@ export async function isTrusted(cert) { const fp = await fingerprint(cert.der); 
 /* ------------------------------------------------------------------ helpers */
 const fmt = d => (d ? d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
 const fmtDay = d => (d ? d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+/** Acrobat's date style: 2026/09/19 19:15:18 +04'00' */
+export const acroDate = d => { if (!d) return '—'; const p = n => String(n).padStart(2, '0'), o = -d.getTimezoneOffset(), a = Math.abs(o); return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${o < 0 ? '-' : '+'}${p(Math.floor(a / 60))}'${p(a % 60)}'`; };
 const nameOf = s => (s?.signer ? s.signer.subject.CN || s.signer.subject.pseudonym || s.signer.subject.O || 'Unknown signer' : 'Unknown signer');
 export const STATUS = {
   valid: { cls: 'ok', ic: 'check-circle', short: 'Signature valid', head: n => `Signature is VALID, signed by ${n}.` },
@@ -47,7 +49,8 @@ export function findings(s) {
   if (s.expired) L.push(['warn', 'A certificate in the chain was outside its validity period at the time of signing.']);
   for (const p of s.chainProblems || []) if (!s.chainTrusted) L.push(['warn', p]);
   for (const p of s.problems || []) if (!/Content was added/.test(p) && !/no longer matches/.test(p) && !/does not match/.test(p)) L.push(['warn', p]);
-  L.push(['info', `Signing time is taken from the signature: ${fmt(s.signTime)}.`]);
+  L.push(['info', s.signTimeFromSignature ? 'Signing time is from the clock on the signer’s computer.' : 'Signing time is from the clock on the signer’s computer (the file’s own date field).']);
+  L.push(['info', `Signature was validated as of the signing time: ${acroDate(s.signTime)}.`]);
   L.push(['info', 'Certificate revocation (CRL / OCSP) is not checked — a browser can’t reach the issuing authority’s servers.']);
   return L;
 }
@@ -66,38 +69,92 @@ export function validationDialog(dv, s) {
   });
 }
 
+/** Re-validates (with the current trusted list) and shows Acrobat's “Signature Validation Status” — what Validate Signature does. */
+export async function validateAgain(dv, s) {
+  try { await dv.sigApi?.revalidate(); } catch (e) { console.warn(e); }
+  validationDialog(dv, dv.sigApi?.sigs.find(x => x.index === s.index) || s);
+}
+
+/** Acrobat's “Signature Properties”: validity summary, signer info, and the Show Signer's Certificate / Advanced Properties / Validate Signature buttons. */
 export function propertiesDialog(dv, s) {
   const st = statusOf(s);
-  const rows = [['Status', st.short], ['Signed by', describeSigner(s.signer) || '—'], ['Date', fmt(s.signTime)], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—'],
-    ['Method', s.algorithm || '—'], ['Format', s.format || '—'], ['Document fingerprint', s.digestOk === true ? 'Matches the signed fingerprint' : s.digestOk === false ? 'Does not match' : s.sigOk ? 'Covered by the signature value' : '—'], ['Signature value', s.sigOk === true ? 'Verified with the signer’s certificate' : s.sigOk === false ? 'Does not verify' : '—'], ['Signed part of file', s.signedLength ? `${s.signedLength.toLocaleString()} of ${s.fileLength.toLocaleString()} bytes` : '—'], ['Document changed since', s.modifiedAfter ? 'Yes' : s.sigOk ? 'No' : '—']];
+  const info = [['Signed by', describeSigner(s.signer) || '—'], ['Date', acroDate(s.signTime)], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—']];
   const d = dialog({
-    title: 'Signature Properties', width: 560,
-    body: h('div', h('div.sg-head.' + st.cls, icon(st.ic, 22), h('strong', st.head(nameOf(s)))), h('dl.vf-dl', rows.map(([k, v]) => [h('dt', k), h('dd', v)])), h('ul.sg-lines', findings(s).filter(x => x[0] !== 'info').map(row))),
+    title: 'Signature Properties', width: 620,
+    body: h('div', h('div.sg-head.' + st.cls, icon(st.ic, 22), h('strong', st.head(nameOf(s)))),
+      h('h4.sg-sub', 'Signature Validity Summary'), h('ul.sg-lines', findings(s).map(row)),
+      h('h4.sg-sub', 'Signer Information'), h('dl.vf-dl', info.map(([k, v]) => [h('dt', k), h('dd', v)]))),
     actions: [
       button({ label: 'Show Signer’s Certificate…', icon: 'certificate', onClick: () => { d.close(); certificateDialog(dv, s); } }),
-      button({ label: 'View Signed Version', onClick: () => { d.close(); viewSigned(dv, s); } }),
+      button({ label: 'Advanced Properties…', onClick: () => { d.close(); advancedDialog(dv, s); } }),
+      button({ label: 'Validate Signature', icon: 'check-circle', onClick: () => { d.close(); validateAgain(dv, s); } }),
       button({ label: 'Close', kind: 'primary', onClick: () => d.close() })],
   });
 }
 
+const tabStrip = (names, onPick) => { const bar = h('div.cv-tabs', { role: 'tablist' }); names.forEach((n, i) => bar.append(h('button.cv-tab', { type: 'button', role: 'tab', 'aria-selected': String(i === 0), onclick: e => { bar.querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', String(b === e.currentTarget))); onPick(n); } }, n))); return bar; };
+const dl = rows => h('dl.vf-dl', rows.map(([k, v]) => [h('dt', k), h('dd', v)]));
+const HASH_NAME = { 'SHA-1': 'SHA1', 'SHA-256': 'SHA256', 'SHA-384': 'SHA384', 'SHA-512': 'SHA512' };
+
+/** Acrobat's “Signature Properties” → Advanced Properties (Summary / Date/Time / Legal). */
+export function advancedDialog(dv, s) {
+  const body = h('div.cv-body');
+  const algo = (s.algorithm || '').split(' with ');
+  const views = {
+    'Summary': () => dl([['Signed by', describeSigner(s.signer) || '—'], ['Hash algorithm', HASH_NAME[algo[0]] || algo[0] || '—'], ['Signature algorithm', algo[1] || '—'], ['Signature type', 'Approval signature'], ['Signature format', s.format || '—'], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—']]),
+    'Date/Time': () => dl([['Signing time', acroDate(s.signTime)], ['Source of the signing time', s.signTimeFromSignature ? 'The clock on the signer’s computer (signed attribute)' : 'The signature field’s date entry'], ['Validated as of', acroDate(s.signTime)], ['Document timestamp', 'None']]),
+    'Legal': () => h('p.hint', 'No legal notice or certification restrictions were found in this signature.'),
+  };
+  const show = n => body.replaceChildren(views[n]());
+  const d = dialog({ title: 'Signature Properties — Advanced', width: 560, body: h('div', tabStrip(Object.keys(views), show), body), actions: [button({ label: 'Close', kind: 'primary', onClick: () => d.close() })] });
+  show('Summary');
+}
+
+/** Acrobat's “Import Contact Settings”: choose how a certificate is trusted. */
+function trustDialog(dv, c, done) {
+  const root = h('input', { type: 'checkbox', checked: true, id: 'tr-root' });
+  const signed = h('input', { type: 'checkbox', checked: true, disabled: true, id: 'tr-signed' });
+  const fp = h('code.hint', '…'); fingerprint(c.der, 'SHA-256').then(v => (fp.textContent = v));
+  const d = dialog({
+    title: 'Import Contact Settings', width: 560,
+    body: h('div', dl([['Subject', describeSigner({ subject: c.subject })], ['Issuer', c.selfSigned ? 'Same as subject (self-signed)' : describeSigner({ subject: c.issuer })], ['Valid to', fmtDay(c.notAfter)], ['SHA-256 fingerprint', fp]]),
+      h('h4.sg-sub', 'Trust'), h('label.cv-check', root, h('span', 'Use this certificate as a trusted root')),
+      h('p.hint', 'If signature validation succeeds, trust this certificate for:'), h('label.cv-check', signed, h('span', 'Signed documents or data')),
+      h('p.hint', 'Only trust a certificate whose fingerprint you have confirmed with the issuer. India’s CCA roots are already built in.')),
+    actions: [button({ label: 'Cancel', onClick: () => d.close() }), button({ label: 'OK', kind: 'primary', onClick: async () => { d.close(); if (root.checked) { await addTrusted(c); toast('Certificate added to your trusted identities.', 'success'); } done && done(); } })],
+  });
+}
+
+/** Acrobat's Certificate Viewer: a certificate path on the left; Summary / Details / Revocation / Trust / Policies / Legal Notice on the right. */
 export async function certificateDialog(dv, s) {
   const chain = s.chain || (s.signerCert ? [s.signerCert] : []); if (!chain.length) return toast('No certificate is embedded in this signature.', 'error');
-  const detail = h('div.cert-detail'); const list = h('div.cert-list', { role: 'listbox' });
-  let current = 0;
-  async function show(i) {
-    current = i; list.querySelectorAll('button').forEach((b, k) => b.setAttribute('aria-pressed', String(k === i)));
-    const c = chain[i]; const trusted = await isTrusted(c); const [f1, f256] = [await fingerprint(c.der, 'SHA-1'), await fingerprint(c.der, 'SHA-256')];
-    const nm = o => Object.entries(o).map(([k, v]) => `${k} = ${v}`).join(', ') || '—';
-    const sigName = { '1.2.840.113549.1.1.11': 'SHA-256 with RSA', '1.2.840.113549.1.1.5': 'SHA-1 with RSA', '1.2.840.113549.1.1.12': 'SHA-384 with RSA', '1.2.840.113549.1.1.13': 'SHA-512 with RSA' }[c.sigAlg] || c.sigAlg;
-    detail.replaceChildren(
-      h('dl.vf-dl', [['Subject', nm(c.subject)], ['Issuer', c.selfSigned ? 'Same as subject (self-signed)' : nm(c.issuer)], ['Serial number', c.serial.toUpperCase()], ['Valid from', fmtDay(c.notBefore)], ['Valid to', fmtDay(c.notAfter)], ['Signature algorithm', sigName], ['Public key', c.keyBits ? `RSA ${c.keyBits}-bit` : c.keyAlg], ['SHA-1 fingerprint', f1], ['SHA-256 fingerprint', f256]].map(([k, v]) => [h('dt', k), h('dd.mono', v)])),
-      h('div.sg-trust', trusted ? h('span.pill.ok', icon('check', 12), 'Trusted by you') : h('span.pill.warn', 'Not in your trusted list'),
-        button({ label: trusted ? 'Remove trust' : 'Trust this certificate', size: 'sm', kind: trusted ? 'secondary' : 'primary', onClick: async () => { trusted ? removeTrusted(await fingerprint(c.der)) : await addTrusted(c); toast(trusted ? 'Removed from your trusted certificates.' : 'Added. Re-validating signatures…', 'success', 2500); await show(current); if (dv.sigApi) await dv.sigApi.revalidate(); } })),
-      !trusted ? h('p.hint', 'Only trust a certificate whose fingerprint you have confirmed with the issuer — for Indian digital signatures, the CCA India root from cca.gov.in (it publishes a way to confirm the thumbprint).') : null);
-  }
-  chain.forEach((c, i) => list.append(h('button.cert-item', { type: 'button', style: { paddingLeft: 10 + i * 14 + 'px' }, onclick: () => show(i) }, icon('certificate', 16), h('span', c.subject.CN || c.subject.O || 'Certificate'))));
-  const d = dialog({ title: 'Certificate Viewer', width: 760, body: h('div.cert-grid', list, detail), actions: [button({ label: 'Close', kind: 'primary', onClick: () => d.close() })] });
-  await show(0);
+  const detail = h('div.cv-body'); const list = h('div.cert-list', { role: 'listbox' });
+  let current = 0, tab = 'Summary';
+  const nm = o => Object.entries(o).map(([k, v]) => `${k} = ${v}`).join(', ') || '—';
+  const sigName = o => ({ '1.2.840.113549.1.1.11': 'SHA-256 with RSA', '1.2.840.113549.1.1.5': 'SHA-1 with RSA', '1.2.840.113549.1.1.12': 'SHA-384 with RSA', '1.2.840.113549.1.1.13': 'SHA-512 with RSA', '1.2.840.113549.1.1.10': 'RSASSA-PSS' }[o] || o);
+  const label = c => { const n = c.subject; return `${n.CN || n.pseudonym || n.O || 'Certificate'}${n.email ? ` <${n.email}>` : ''}`; };
+  const views = {
+    'Summary': async c => dl([['Subject', label(c)], ['Issuer', c.selfSigned ? label(c) : (c.issuer.CN || c.issuer.O || '—')], ['Valid from', acroDate(c.notBefore)], ['Valid to', acroDate(c.notAfter)], ['Intended usage', c.keyUsage.join(', ') || '—'], ['Certificate authority', c.isCA ? 'Yes' : 'No']]),
+    'Details': async c => dl([['Version', 'V' + c.version], ['Serial number', c.serial.toUpperCase()], ['Signature algorithm', sigName(c.sigAlg)], ['Issuer', c.selfSigned ? 'Same as subject (self-signed)' : nm(c.issuer)], ['Valid from', acroDate(c.notBefore)], ['Valid to', acroDate(c.notAfter)], ['Subject', nm(c.subject)], ['Public key', c.keyAlg === '1.2.840.113549.1.1.1' ? `RSA (${c.keyBits} bits)` : c.keyAlg], ['Key usage', c.keyUsage.join(', ') || '—'], ['SHA-1 digest', await fingerprint(c.der, 'SHA-1')], ['SHA-256 digest', await fingerprint(c.der, 'SHA-256')]]),
+    'Revocation': async c => h('div', h('p', icon('info', 14), ' Revocation checking was not performed. A web browser cannot reach the certificate authority’s servers, so CRL and OCSP answers are not consulted.'),
+      dl([['CRL distribution points', c.crlUrls.join('\n') || 'None listed'], ['OCSP responder', c.ocspUrls.join('\n') || 'None listed'], ['Issuer certificate', c.caIssuerUrls.join('\n') || 'None listed']]), h('p.hint', 'As in Acrobat, revocation is not checked on or above a trust anchor.')),
+    'Trust': async c => {
+      const mine = await isTrusted(c), built = !!c.builtin, i = chain.indexOf(c), anchor = s.chainTrusted && i === s.chain.length - 1;
+      return h('div', h('p', icon(s.chainTrusted ? 'check-circle' : 'alert-circle', 14), ' ', s.chainTrusted ? 'The selected certificate path is valid.' : 'The selected certificate path is not valid: it does not lead to a trusted certificate.'),
+        c.selfSigned ? h('p', 'This is a self-signed certificate.') : null,
+        h('p.hint', `The path validation checks were done as of the signing time: ${acroDate(s.signTime)}`),
+        h('h4.sg-sub', 'Trust Settings'),
+        h('p', built ? 'Trusted root built into this app (India’s Controller of Certifying Authorities and licensed CAs).' : mine ? 'Trusted by you as a root, for signed documents or data.' : anchor ? 'Trusted.' : 'This certificate is not in your list of trusted identities.'),
+        built ? null : button({ label: mine ? 'Remove from Trusted Identities' : 'Add to Trusted Identities…', kind: mine ? 'secondary' : 'primary', size: 'sm', onClick: async () => { if (mine) { removeTrusted(await fingerprint(c.der)); toast('Removed from your trusted identities.', 'info'); await dv.sigApi?.revalidate(); d.close(); validationDialog(dv, dv.sigApi?.sigs.find(x => x.index === s.index) || s); } else trustDialog(dv, c, async () => { await dv.sigApi?.revalidate(); d.close(); validationDialog(dv, dv.sigApi?.sigs.find(x => x.index === s.index) || s); }); } }));
+    },
+    'Policies': async c => c.policies.length ? dl(c.policies.map((o, k) => [`Policy ${k + 1}`, o])) : h('p.hint', 'This certificate lists no certificate policies.'),
+    'Legal Notice': async () => h('p.hint', 'No legal notice is included in this certificate.'),
+  };
+  const show = async () => { detail.replaceChildren(await views[tab](chain[current])); };
+  const pick = i => { current = i; list.querySelectorAll('button').forEach((b, k) => b.setAttribute('aria-pressed', String(k === i))); return show(); };
+  chain.forEach((c, i) => list.append(h('button.cert-item', { type: 'button', style: { paddingLeft: 10 + i * 14 + 'px' }, onclick: () => pick(i) }, icon('certificate', 16), h('span', c.subject.CN || c.subject.O || 'Certificate'))));
+  const d = dialog({ title: 'Certificate Viewer', width: 820, body: h('div.cert-grid', list, h('div', tabStrip(Object.keys(views), n => { tab = n; show(); }), detail)), actions: [button({ label: 'Close', kind: 'primary', onClick: () => d.close() })] });
+  await pick(0);
 }
 
 export async function viewSigned(dv, s) {
@@ -140,7 +197,7 @@ export async function compareDialog(dv, s) {
 /* ------------------------------------------------------------------ context menu (as in Acrobat) */
 export function signatureMenu(dv, s, anchor) {
   popupMenu(anchor, [
-    { label: 'Validate Signature', icon: 'check-circle', onClick: () => validationDialog(dv, s) },
+    { label: 'Validate Signature', icon: 'check-circle', onClick: () => validateAgain(dv, s) },
     '-',
     { label: 'View Signed Version', icon: 'history', onClick: () => viewSigned(dv, s) },
     { label: 'Compare Signed Version to Current Version', icon: 'compare', onClick: () => compareDialog(dv, s) },
@@ -203,10 +260,10 @@ export async function attach(dv) {
     dv.viewer.pages.forEach(p => p.sigEl.replaceChildren());
     for (const s of api.sigs) {
       const w = s.widget; if (!w || w.w < 4 || w.h < 4) continue; const st = statusOf(s); const info = dv.viewer.pages[w.page]; if (!info) continue;
-      const b = h('button.sig-badge.' + st.cls, { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click for options`, 'aria-label': `${st.short}. Open signature options.`, 'aria-haspopup': 'menu' },
+      const b = h('button.sig-badge.' + st.cls, { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click to validate, right-click for more`, 'aria-label': `${st.short}. Validate signature. Context menu for more options.`, 'aria-haspopup': 'menu' },
         h('span.sig-mark', icon(st.ic, 20)));
       fieldSkin(dv, info, w, s).then(skin => { if (skin && b.isConnected) { b.classList.add('skinned'); b.replaceChildren(skin); } }).catch(e => console.warn('signature look', e));
-      b.addEventListener('click', e => { e.stopPropagation(); signatureMenu(dv, s, b); });
+      b.addEventListener('click', e => { e.stopPropagation(); validateAgain(dv, s); });   // like Acrobat: clicking a signature validates it; the menu is on right-click
       b.addEventListener('contextmenu', e => { e.preventDefault(); signatureMenu(dv, s, { getBoundingClientRect: () => ({ left: e.clientX, bottom: e.clientY }) }); });
       info.sigEl.append(b);
     }
@@ -217,7 +274,7 @@ export async function attach(dv) {
 /* ------------------------------------------------------------------ Adobe-style signature appearance */
 const SVGNS = 'http://www.w3.org/2000/svg';
 const MARKS = { // flat colour, heavy black outline, hard black shadow to the lower right (the Acrobat look); points are in a 0–100 box
-  ok: { pts: '10,48 0,56 38,100 100,12 82,1 36,72', fill: '#12b04a', label: 'Signature valid' },
+  ok: { pts: '85.6,0 40.2,74.9 32.2,74.9 9.8,49.1 0,61.7 37.9,99.4 99.4,11.4', fill: '#00b03a', label: 'Signature valid' },
   bad: { pts: '12,28 28,12 50,34 72,12 88,28 66,50 88,72 72,88 50,66 28,88 12,72 34,50', fill: '#e0231d', label: 'Signature invalid' },
   warn: { pts: '50,4 99,94 1,94', fill: '#f5b400', label: 'Valid, but changed after signing' },
 };
@@ -225,8 +282,9 @@ function glyph(kind) {
   const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '-4 -4 116 116'); svg.setAttribute('class', 'sig-glyph ' + kind);
   const { pts, fill } = MARKS[kind];
   const poly = (attrs, parent) => { const p = document.createElementNS(SVGNS, 'polygon'); p.setAttribute('points', pts); for (const k in attrs) p.setAttribute(k, attrs[k]); parent.append(p); };
-  const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(3.5 3)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
-  poly({ fill, stroke: '#000', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, svg);
+  const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(5.5 4.5)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 5.2, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
+  poly({ fill: '#000', stroke: '#000', 'stroke-width': 5.2, 'stroke-linejoin': 'round' }, svg);   // outline
+  poly({ fill }, svg);                                                                               // the green shape
   if (kind === 'warn') { const r = document.createElementNS(SVGNS, 'path'); r.setAttribute('d', 'M46 38h8l-1.5 30h-5zM46.5 74h7v8h-7z'); r.setAttribute('fill', '#000'); svg.append(r); }
   return svg;
 }
@@ -267,11 +325,13 @@ async function fieldSkin(dv, info, w, s) {
   const kind = markKind(s);
   if (!kind) return null; // “unknown” keeps the file's own “?” — which is what Acrobat shows too
   const oc = await cleanFieldFor(dv, info, w); if (!oc) return null;
-  const label = MARKS[kind].label;
-  const size = Math.min(w.h * 0.7, w.w * 0.3);
+  const label = MARKS[kind].label, size = Math.min(w.h * 0.7, w.w * 0.3), TOP = 0.31;
+  const tick = (() => { const g = glyph(kind); const side = size * 1.16; g.style.width = g.style.height = side + 'px'; g.style.left = (w.w * 0.393 - size * 0.04) + 'px'; g.style.top = (w.h * 0.178 - size * 0.04) + 'px'; return g; })();
   const view = document.createElement('canvas'); view.width = oc.width; view.height = oc.height; view.getContext('2d').drawImage(oc, 0, 0); // own copy: the cached one is reused
-  return h('div.sig-skin', view, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label),
-    (() => { const g = glyph(kind); const side = size * 1.16; g.style.width = g.style.height = side + 'px'; g.style.left = (w.w * 0.393 - size * 0.04) + 'px'; g.style.top = (w.h * 0.178 - size * 0.04) + 'px'; return g; })());
+  const text = h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label);
+  if (!oc.layered) return h('div.sig-skin', view, text, tick);       // fallback: the field came as one picture, so the tick has to go on top
+  view.style.clipPath = `inset(${TOP * 100}% 0 0 0)`;                // the file's own status line (“Signature Not Verified”) is replaced by the label
+  return h('div.sig-skin.layered', tick, view, text);                // white field → tick → the field's text on top → label
 }
 
 /**
@@ -291,14 +351,21 @@ export async function stampForPrint(dv, bytes) {
       const img = await pdf.embedPng(await canvasToBytes(oc, 'image/png'));
       const g = pageGeom(page), Y = y => g.H - y, M = MARKS[kind];
       page.pushOperators(PDFLib.pushGraphicsState(), PDFLib.concatTransformationMatrix(...g.m));
-      page.drawImage(img, { x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h });
-      page.drawRectangle({ x: w.x, y: Y(w.y + w.h * 0.31), width: w.w, height: w.h * 0.31, color: PDFLib.rgb(1, 1, 1) });
-      const fs = w.h * 0.2; page.drawText(M.label, { x: w.x + w.w * 0.016, y: Y(w.y + w.h * 0.155) - fs * 0.35, size: fs, font, color: PDFLib.rgb(0, 0, 0) });
-      const size = Math.min(w.h * 0.7, w.w * 0.3), k = size / 100, ox = w.x + w.w * 0.393, oy = w.y + w.h * 0.178;
-      const path = 'M' + M.pts.split(' ').join(' L') + ' Z';
-      page.drawSvgPath(path, { x: ox + 3.5 * k, y: Y(oy + 3 * k), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 2.6 * k });
-      page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: hex(M.fill), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 2.6 * k });
-      if (kind === 'warn') { page.drawRectangle({ x: ox + 46 * k, y: Y(oy + 68 * k), width: 8 * k, height: 30 * k, color: PDFLib.rgb(0, 0, 0) }); page.drawRectangle({ x: ox + 46.5 * k, y: Y(oy + 82 * k), width: 7 * k, height: 8 * k, color: PDFLib.rgb(0, 0, 0) }); }
+      const size = Math.min(w.h * 0.7, w.w * 0.3), k = size / 100, ox = w.x + w.w * 0.393, oy = w.y + w.h * 0.178, path = 'M' + M.pts.split(' ').join(' L') + ' Z';
+      const drawTick = () => {
+        page.drawSvgPath(path, { x: ox + 5.5 * k, y: Y(oy + 4.5 * k), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 5.2 * k, borderLineJoin: PDFLib.LineJoinStyle.Round });
+        page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 5.2 * k, borderLineJoin: PDFLib.LineJoinStyle.Round });
+        page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: hex(M.fill) });
+        if (kind === 'warn') { page.drawRectangle({ x: ox + 46 * k, y: Y(oy + 68 * k), width: 8 * k, height: 30 * k, color: PDFLib.rgb(0, 0, 0) }); page.drawRectangle({ x: ox + 46.5 * k, y: Y(oy + 82 * k), width: 7 * k, height: 8 * k, color: PDFLib.rgb(0, 0, 0) }); }
+      };
+      const fs = w.h * 0.2, drawLabel = () => page.drawText(M.label, { x: w.x + w.w * 0.016, y: Y(w.y + w.h * 0.155) - fs * 0.35, size: fs, font, color: PDFLib.rgb(0, 0, 0) });
+      page.drawRectangle({ x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h, color: PDFLib.rgb(1, 1, 1) }); // the field's own look is covered
+      if (oc.layered) {   // white → tick → the field's text above it → label
+        drawTick();
+        page.pushOperators(PDFLib.pushGraphicsState(), PDFLib.rectangle(w.x, Y(w.y + w.h), w.w, w.h * 0.69), PDFLib.clip(), PDFLib.endPath());   // only below the label line
+        page.drawImage(img, { x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h }); page.pushOperators(PDFLib.popGraphicsState());
+        drawLabel();
+      } else { page.drawImage(img, { x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h }); page.drawRectangle({ x: w.x, y: Y(w.y + w.h * 0.31), width: w.w, height: w.h * 0.31, color: PDFLib.rgb(1, 1, 1) }); drawLabel(); drawTick(); }
       page.pushOperators(PDFLib.popGraphicsState());
     }
     return await pdf.save({ useObjectStreams: true });
@@ -317,7 +384,7 @@ export function mountPanel(dv, el) {
         h('div.sg-who', nameOf(s)), h('div.hint', `${fmt(s.signTime)}${s.info?.reason ? ' · ' + s.info.reason : ''}`),
         s.modifiedAfter ? h('div.hint', icon('alert', 12), ' Changed after signing') : null,
         h('div.vf-actions',
-          button({ label: 'Validate', icon: 'check-circle', size: 'sm', kind: 'primary', onClick: () => validationDialog(dv, s) }),
+          button({ label: 'Validate', icon: 'check-circle', size: 'sm', kind: 'primary', onClick: () => validateAgain(dv, s) }),
           button({ label: 'Properties', size: 'sm', onClick: () => propertiesDialog(dv, s) }),
           button({ label: 'View signed version', size: 'sm', onClick: () => viewSigned(dv, s) }),
           button({ label: 'Compare', size: 'sm', onClick: () => compareDialog(dv, s) }),

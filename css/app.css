@@ -252,7 +252,8 @@ html, body { height: 100%; overflow: hidden; }
 .sig-layer { pointer-events: none; }
 .sig-badge { position: absolute; pointer-events: auto; padding: 0; border: 1.5px dashed currentColor; border-radius: 3px; background: transparent; cursor: pointer; text-align: left; transition: background-color var(--dur-2), transform var(--dur-2) var(--ease-out); animation: pop-in var(--dur-3) var(--ease-out); }
 .sig-badge:hover { background: rgba(20, 115, 230, .1); } .sig-badge.ok { color: #0f9d58; } .sig-badge.warn { color: #e08a00; } .sig-badge.bad { color: #d31510; } .sig-badge.info { color: #1473e6; }
-.sig-badge.skinned { border: 1px dotted #555; border-radius: 0; overflow: hidden; }
+.sig-badge.skinned, .sig-badge.skinned:hover { border: 1px dotted #555; border-radius: 0; overflow: hidden; background: #fff; }
+.sig-skin.layered .sig-label { background: transparent; }
 .sig-skin { position: absolute; inset: 0; pointer-events: none; }
 .sig-skin canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .sig-label { position: absolute; left: 0; right: 0; top: 0; height: 31%; display: flex; align-items: center; padding: 0 1.6%; background: #fff; color: #000; white-space: nowrap; font-family: Arial, "Liberation Sans", Helvetica, sans-serif; line-height: 1; }
@@ -290,3 +291,10 @@ html, body { height: 100%; overflow: hidden; }
 .fp-row.missing .fp-name { opacity: .55; } .fp-cloud { color: var(--c-text-3); display: grid; }
 .fp-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--c-border); padding-top: 6px; }
 .pg .fp-btn { width: 180px; }
+
+.cv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--c-border); margin-bottom: var(--s-3); flex-wrap: wrap; }
+.cv-tab { padding: 6px 12px; border: 0; background: transparent; border-bottom: 2px solid transparent; color: var(--c-text-2); cursor: pointer; font: inherit; }
+.cv-tab[aria-selected=true] { color: var(--c-text); border-bottom-color: var(--c-brand); font-weight: 600; }
+.cv-body { min-height: 170px; } .cv-body dd { white-space: pre-line; word-break: break-word; }
+.cv-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.sg-sub { margin: var(--s-4) 0 var(--s-2); font-size: var(--fs-md); font-weight: 600; }

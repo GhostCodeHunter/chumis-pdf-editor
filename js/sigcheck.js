@@ -49,16 +49,20 @@ export function parseCert(n) {
   const keyAlg = oidOf(spki.children[0].children[0]); let keyBits = 0;
   try { if (keyAlg === '1.2.840.113549.1.1.1') { const inner = parse(valOf(spki.children[1]).subarray(1), 0); const mod = valOf(inner.children[0]); keyBits = (mod.length - (mod[0] === 0 ? 1 : 0)) * 8; } } catch {}
   const sigBits = valOf(n.children[2]);
-  let ski = null, isCA = false;
+  let ski = null, isCA = false; const keyUsage = [], policies = [], crlUrls = [], ocspUrls = [], caIssuerUrls = [];
   try {
     const ext = tbs.children.find(c => c.tag === 0xa3);
     if (ext) for (const e of ext.children[0].children) {
       const id = oidOf(e.children[0]); const inner = parse(valOf(e.children[e.children.length - 1]), 0);
       if (id === '2.5.29.14') ski = valOf(inner);
       if (id === '2.5.29.19') isCA = !!inner.children[0] && inner.children[0].tag === 0x01 && valOf(inner.children[0])[0] !== 0;
+      if (id === '2.5.29.15') { const v = valOf(inner), bits = v.subarray(1), names = ['Digital Signature', 'Non-Repudiation', 'Key Encipherment', 'Data Encipherment', 'Key Agreement', 'Certificate Signing', 'CRL Signing', 'Encipher Only', 'Decipher Only']; names.forEach((nme, i) => { if (bits[i >> 3] & (0x80 >> (i & 7))) keyUsage.push(nme); }); }
+      if (id === '2.5.29.32') for (const pi of inner.children) { try { policies.push(oidOf(pi.children[0])); } catch {} }
+      if (id === '2.5.29.31') for (const m of latin(valOf(e.children[e.children.length - 1])).matchAll(/https?:\/\/[\x21-\x7e]+/g)) crlUrls.push(m[0]);
+      if (id === '1.3.6.1.5.5.7.1.1') for (const ad of inner.children) { try { const how = oidOf(ad.children[0]), uri = latin(valOf(ad.children[1])); (how === '1.3.6.1.5.5.7.48.1' ? ocspUrls : caIssuerUrls).push(uri); } catch {} }
     }
   } catch {}
-  return { ski, isCA, issuerKey: canonName(issuer), subjectKey: canonName(subject), der: rawOf(n), tbsRaw: rawOf(tbs), sigValue: sigBits.subarray(1), serial: hex(serial), serialBytes: serial, issuerRaw: rawOf(issuer), subjectRaw: rawOf(subject), issuer: nameOf(issuer), subject: nameOf(subject), notBefore: timeOf(val.children[0]), notAfter: timeOf(val.children[1]), spki: rawOf(spki), sigAlg, keyAlg, keyBits, selfSigned: eq(rawOf(issuer), rawOf(subject)) };
+  return { ski, isCA, keyUsage, policies, crlUrls, ocspUrls, caIssuerUrls, version: tbs.children[0].tag === 0xa0 ? valOf(tbs.children[0].children[0])[0] + 1 : 1, issuerKey: canonName(issuer), subjectKey: canonName(subject), der: rawOf(n), tbsRaw: rawOf(tbs), sigValue: sigBits.subarray(1), serial: hex(serial), serialBytes: serial, issuerRaw: rawOf(issuer), subjectRaw: rawOf(subject), issuer: nameOf(issuer), subject: nameOf(subject), notBefore: timeOf(val.children[0]), notAfter: timeOf(val.children[1]), spki: rawOf(spki), sigAlg, keyAlg, keyBits, selfSigned: eq(rawOf(issuer), rawOf(subject)) };
 }
 
 /** Parses a certificate file (DER or PEM). */
@@ -175,6 +179,7 @@ async function verifyCms(der, bytes, [b0, b1, b2, b3], r) {
   r.format = r.info.filter || ''; r.certs = certs;
   // signing time
   if (attrs) for (const a of attrs.children) if (oidOf(a.children[0]) === '1.2.840.113549.1.9.5') r.signTime = timeOf(a.children[1].children[0]);
+  r.signTimeFromSignature = !!r.signTime;
   r.signTime = r.signTime || r.info.when || null;
   // digest of the signed bytes
   const digestName = HASHES[digestOid]; if (!digestName || !hashName) { r.problems.push('Unsupported hash algorithm.'); r.signerCert = signerCandidates(sid, certs)[0] || null; return; }
