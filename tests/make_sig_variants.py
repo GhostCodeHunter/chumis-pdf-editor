@@ -12,18 +12,23 @@ def run(*a, **k): return subprocess.run(a, check=True, capture_output=True, **k)
 tmp = tempfile.mkdtemp()
 P = lambda n: os.path.join(tmp, n)
 
-def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b''):
+def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b'', appearance=False):
     body = base + (b'\n' if not base.endswith(b'\n') else b'')
     sig = (f'{sig_num} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /{subfilter} /ByteRange [0 0000000000 0000000000 0000000000] /Contents <').encode() + b'0' * siglen + b'> /M (D:20260919174500+05\'30\') /Name (DS Test) /Reason (Testing) >>\nendobj\n'
-    widget = f'{widget_num} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V {sig_num} 0 R /Rect [60 560 330 640] /F 132 /P 4 0 R >>\nendobj\n'.encode()
+    ap_num = widget_num + 1
+    widget = f'{widget_num} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V {sig_num} 0 R /Rect [60 560 330 640] /F 132 /P 4 0 R {"/AP << /N " + str(ap_num) + " 0 R >>" if appearance else ""} >>\nendobj\n'.encode()
+    if appearance:   # the layout many Indian government signers use: a "Signature Not Verified" line, a yellow ? and the signer text
+        content = b'q 1 1 1 rg 0 0 270 80 re f Q BT /F1 9 Tf 4 66 Td 0 g (Signature Not Verified) Tj ET BT /F2 46 Tf 110 14 Td 1 0.82 0 rg (?) Tj ET BT /F1 8 Tf 4 44 Td 0 g (Digitally signed by DS GOODS AND) Tj 0 -10 Td (SERVICES TAX NETWORK 11) Tj 0 -10 Td (Date: 2026.09.19 19:15:18 IST) Tj ET'
+        widget += f'{ap_num} 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 270 80] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Length {len(content)} >>\nstream\n'.encode() + content + b'\nendstream\nendobj\n'
     page = b'4 0 obj\n<<' + page_obj.rstrip() + b' /Annots [ ' + f'{widget_num} 0 R'.encode() + b' ] >>\nendobj\n'
     root = b'5 0 obj\n<<' + root_obj.rstrip() + b' /AcroForm << /Fields [ ' + f'{widget_num} 0 R'.encode() + b' ] /SigFlags 3 >> >>\nendobj\n'
     pos = {}; out = body
     for num, ob in [(sig_num, sig), (widget_num, widget), (4, page), (5, root)]:
         pos[num] = len(out); out += ob
+        if num == widget_num and appearance: pos[widget_num + 1] = pos[widget_num] + ob.index(f'{widget_num + 1} 0 obj'.encode())
     xo = len(out); xref = b'xref\n'
     for num in sorted(pos): xref += f'{num} 1\n{pos[num]:010d} 00000 n \n'.encode()
-    xref += f'trailer\n<< /Size {widget_num+1} /Root 5 0 R /Prev {startxref} >>\nstartxref\n{xo}\n%%EOF\n'.encode() + extra
+    xref += f'trailer\n<< /Size {widget_num+2} /Root 5 0 R /Prev {startxref} >>\nstartxref\n{xo}\n%%EOF\n'.encode() + extra
     full = out + xref
     i = full.index(b'/Contents <') + len(b'/Contents '); j = full.index(b'>', i) + 1
     br = f'/ByteRange [0 {i:010d} {j:010d} {len(full)-j:010d}]'.encode()
@@ -45,14 +50,15 @@ def cms(content_path, *flags):
     run('openssl','cms','-sign','-binary','-in',content_path,'-signer',lc,'-inkey',lk,'-certfile',chain,'-outform','DER','-out',P('sig.der'),*flags)
     return open(P('sig.der'),'rb').read()
 
-def emit(name, subfilter, builder, siglen=16384):
-    full, i, j = pdf_with_placeholder(siglen, subfilter)
+def emit(name, subfilter, builder, siglen=16384, appearance=False):
+    full, i, j = pdf_with_placeholder(siglen, subfilter, appearance=appearance)
     content = full[:i] + full[j:]; open(P('content.bin'),'wb').write(content)
     der = builder(content); hx = der.hex().encode(); assert len(hx) <= siglen - 2, (name, len(hx))
     signed = full[:i+1] + hx + b'0' * (siglen - len(hx)) + full[j-1:]; assert len(signed) == len(full)
     open(os.path.join(OUT, name + '.pdf'), 'wb').write(signed)
 
 emit('detached-sha256',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'))
+emit('appearance-adobe', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), appearance=True)
 emit('detached-sha1',    'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha1'))
 emit('detached-sha512',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha512'))
 emit('stream-ber',       'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256', '-stream'))

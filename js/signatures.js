@@ -183,6 +183,7 @@ export async function attach(dv) {
   if (!sigs.length) return;
   try { await findWidgets(dv, sigs); } catch (e) { console.warn('signature fields not located', e); }
   dv.viewer.addEventListener('built', () => render());
+  dv.viewer.addEventListener('rendered', () => render());
   dv.railEl.querySelector('[data-id=signatures]')?.classList.add('has-badge');
   render();
 
@@ -199,13 +200,57 @@ export async function attach(dv) {
     dv.viewer.pages.forEach(p => p.sigEl.replaceChildren());
     for (const s of api.sigs) {
       const w = s.widget; if (!w || w.w < 4 || w.h < 4) continue; const st = statusOf(s); const info = dv.viewer.pages[w.page]; if (!info) continue;
-      const b = h('button.sig-badge.' + st.cls, { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click for options`, 'aria-label': `${st.short}. Open signature options.`, 'aria-haspopup': 'menu' },
-        h('span.sig-mark', icon(st.ic, 20)));
+      const skin = fieldSkin(info, w, s);
+      const b = h('button.sig-badge.' + st.cls + (skin ? '.skinned' : ''), { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click for options`, 'aria-label': `${st.short}. Open signature options.`, 'aria-haspopup': 'menu' },
+        skin || h('span.sig-mark', icon(st.ic, 20)));
       b.addEventListener('click', e => { e.stopPropagation(); signatureMenu(dv, s, b); });
       b.addEventListener('contextmenu', e => { e.preventDefault(); signatureMenu(dv, s, { getBoundingClientRect: () => ({ left: e.clientX, bottom: e.clientY }) }); });
       info.sigEl.append(b);
     }
   }
+}
+
+
+/* ------------------------------------------------------------------ Adobe-style signature appearance */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function glyph(kind) {
+  const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '0 0 100 100'); svg.setAttribute('class', 'sig-glyph ' + kind);
+  const path = (d, c, w) => { const p = document.createElementNS(SVGNS, 'path'); p.setAttribute('d', d); p.setAttribute('fill', 'none'); p.setAttribute('stroke', c); p.setAttribute('stroke-width', w); p.setAttribute('stroke-linecap', 'round'); p.setAttribute('stroke-linejoin', 'round'); svg.append(p); };
+  if (kind === 'ok') { path('M14 54 L38 80 L88 16', '#064e1f', 21); path('M14 54 L38 80 L88 16', '#16b34a', 14); }
+  else if (kind === 'bad') { path('M20 20 L80 80 M80 20 L20 80', '#6b0a08', 21); path('M20 20 L80 80 M80 20 L20 80', '#e0231d', 14); }
+  else { path('M50 18 L50 58', '#6b4a00', 21); path('M50 18 L50 58', '#f0a400', 14); path('M50 80 L50 80.1', '#6b4a00', 21); path('M50 80 L50 80.1', '#f0a400', 14); }
+  return svg;
+}
+
+/**
+ * Many government signers draw a fallback look inside the signature field: a "Signature Not Verified" line and a yellow “?”.
+ * Acrobat replaces it with its own result. This copy of the field has the yellow “?” removed, so the result can be drawn over it.
+ */
+function cleanedField(info, w) {
+  try {
+    const c = info.canvas; if (!c || !c.width) return null;
+    const sx = c.width / info.w;
+    const x0 = Math.max(0, Math.floor(w.x * sx)), y0 = Math.max(0, Math.floor(w.y * sx));
+    const W = Math.min(c.width - x0, Math.ceil(w.w * sx)), H = Math.min(c.height - y0, Math.ceil(w.h * sx)); if (W < 8 || H < 8) return null;
+    const img = c.getContext('2d').getImageData(x0, y0, W, H), d = img.data, mask = new Uint8Array(W * H); let n = 0;
+    for (let i = 0, k = 0; i < d.length; i += 4, k++) if (d[i] > 200 && d[i + 1] > 140 && d[i] - d[i + 2] > 55 && d[i + 1] - d[i + 2] > 30) { mask[k] = 1; n++; }
+    if (n < 12) return null; // no fallback “?” in this field: leave the file's own look alone
+    const rad = 1, out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (mask[y * W + x]) for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) { const yy = y + dy, xx = x + dx; if (yy >= 0 && yy < H && xx >= 0 && xx < W) out[yy * W + xx] = 1; }
+    const bg = [d[0], d[1], d[2]].every(v => v > 235) ? [255, 255, 255] : [d[0], d[1], d[2]];
+    for (let k = 0; k < out.length; k++) if (out[k]) { d[k * 4] = bg[0]; d[k * 4 + 1] = bg[1]; d[k * 4 + 2] = bg[2]; d[k * 4 + 3] = 255; }
+    const oc = document.createElement('canvas'); oc.width = W; oc.height = H; oc.getContext('2d').putImageData(img, 0, 0); return oc;
+  } catch { return null; }
+}
+/** Acrobat-style result drawn over the signature field: its wording in the top line and a large tick / cross / warning. */
+function fieldSkin(info, w, s) {
+  const kind = s.status === 'invalid' ? 'bad' : s.status === 'valid' ? (s.modifiedAfter ? 'warn' : 'ok') : null;
+  if (!kind) return null; // “unknown” keeps the file's own “?” — which is what Acrobat shows too
+  const oc = cleanedField(info, w); if (!oc) return null;
+  const label = { ok: 'Signature valid', bad: 'Signature invalid', warn: 'Valid, but changed after signing' }[kind];
+  const size = Math.min(w.h * 0.78, w.w * 0.4);
+  return h('div.sig-skin', oc, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.17) + 'px' } }, label),
+    (() => { const g = glyph(kind); g.style.width = g.style.height = size + 'px'; return g; })());
 }
 
 /* ------------------------------------------------------------------ panel */
