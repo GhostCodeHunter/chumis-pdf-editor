@@ -79,7 +79,43 @@ export async function getPageText(pdf, i) {
   perDoc.set(i, res);
   return res;
 }
-export function clearTextCache(pdf) { textCache.delete(pdf); }
+export function clearTextCache(pdf) { textCache.delete(pdf); opCache.delete(pdf); }
+
+/* --- the page drawn WITHOUT a given piece of text (keeps watermarks, table rules, tints and images exactly as they are) --- */
+const opCache = new WeakMap();
+/** Bounding box of every text-showing operation on a page, in display points (origin top-left). pdf.js records them coarsely (about 1/256 of the page). */
+export async function textOpBoxes(pdf, i) {
+  let per = opCache.get(pdf); if (!per) opCache.set(pdf, per = new Map());
+  if (per.has(i)) return per.get(i);
+  const job = (async () => {
+    const page = await pdf.getPage(i + 1); const vp = page.getViewport({ scale: 1 });
+    const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+    await page.render({ canvasContext: c.getContext('2d'), canvas: c, viewport: vp, recordOperations: true }).promise;
+    const rb = page.recordedBBoxes; if (!rb || !rb.length) return [];
+    const ol = await page.getOperatorList(), O = pdfjsLib.OPS, out = [];
+    ol.fnArray.forEach((f, k) => {
+      if (f !== O.showText && f !== O.showSpacedText && f !== O.nextLineShowText && f !== O.nextLineSetSpacingShowText) return;
+      const x0 = rb.minX(k) * c.width, x1 = rb.maxX(k) * c.width, y0 = rb.minY(k) * c.height, y1 = rb.maxY(k) * c.height;
+      if (x1 > x0 && y1 > y0) out.push({ i: k, x0, x1, y0, y1 });
+    });
+    return out;
+  })().catch(() => []);
+  per.set(i, job); return job;
+}
+/** The text operations that draw exactly this run of text (and nothing beside it), with their boxes. */
+export async function segmentOps(pdf, i, seg) {
+  const ops = await textOpBoxes(pdf, i), w = seg.w;
+  return ops.filter(o => { const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2; return cx >= seg.x - 1 && cx <= seg.x + w + 1 && cy >= seg.top && cy <= seg.top + seg.h && o.x0 >= seg.x - 5 && o.x1 <= seg.x + w + 5; });
+}
+/** Renders a rectangle of the page (points) at the given scale with some operations left out. */
+export async function renderPatch(pdf, i, rect, skip, scale = 4) {
+  const page = await pdf.getPage(i + 1);
+  const vp = page.getViewport({ scale, offsetX: -rect.x * scale, offsetY: -rect.y * scale });
+  const c = document.createElement('canvas'); c.width = Math.max(2, Math.ceil(rect.w * scale)); c.height = Math.max(2, Math.ceil(rect.h * scale));
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: ctx, canvas: c, viewport: vp, operationsFilter: k => !skip.has(k) }).promise;
+  return c;
+}
 
 function buildSegments(items) {
   const segs = [];

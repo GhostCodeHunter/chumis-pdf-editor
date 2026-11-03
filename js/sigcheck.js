@@ -84,7 +84,7 @@ export async function buildChain(signer, embedded, trusted) {
     if (trustedFps.has(await fp(cur))) { trustedAt = chain.length - 1; complete = true; break; }
     if (cur.selfSigned) { const ok = await certSignedBy(cur, cur); if (ok === false) problems.push(`The root certificate “${cur.subject.CN || cur.subject.O}” has an invalid self-signature.`); complete = true; break; }
     let issuer = null, from = '';
-    for (const c of embedded) if (c !== cur && eq(c.subjectRaw, cur.issuerRaw) && await certSignedBy(cur, c) !== false) { issuer = c; from = 'file'; break; }
+    for (const c of embedded) if (c !== cur && c.isCA && eq(c.subjectRaw, cur.issuerRaw) && await certSignedBy(cur, c) !== false) { issuer = c; from = 'file'; break; } // only a CA certificate may vouch for another
     if (!issuer) for (const c of trusted) if (eq(c.subjectRaw, cur.issuerRaw) && await certSignedBy(cur, c) !== false) { issuer = c; from = 'trust'; break; }
     if (!issuer) { problems.push(`The issuer of “${cur.subject.CN || cur.subject.O || 'a certificate'}” (${cur.issuer.CN || cur.issuer.O || 'unknown'}) is not in the file or your trusted list.`); break; }
     chain.push(issuer); cur = issuer;
@@ -105,7 +105,7 @@ function pdfString(txt, key) {
 }
 function pdfDate(s) { const m = /D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?([Z+-])?(\d{2})?'?(\d{2})?/.exec(s || ''); if (!m) return null; const off = m[7] === '+' ? -1 : m[7] === '-' ? 1 : 0; return new Date(Date.UTC(+m[1], (m[2] || 1) - 1, m[3] || 1, +(m[4] || 0) + off * +(m[8] || 0), +(m[5] || 0) + off * +(m[9] || 0), m[6] || 0)); }
 
-export async function inspectSignatures(bytes, { trusted = [] } = {}) {
+export async function inspectSignatures(bytes, { trusted = [], pool = [] } = {}) {
   const text = latin(bytes); const out = []; const re = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/g; let m, idx = 0;
   while ((m = re.exec(text))) {
     const [b0, b1, b2, b3] = m.slice(1, 5).map(Number); const r = { index: ++idx, byteRange: [b0, b1, b2, b3], problems: [], info: {} };
@@ -121,7 +121,7 @@ export async function inspectSignatures(bytes, { trusted = [] } = {}) {
       if (!der.some(x => x)) { r.problems.push('This is an empty signature field (not signed yet).'); r.empty = true; out.push(r); continue; }
       r.signedLength = b2 + b3; r.fileLength = bytes.length;
       await verifyCms(der, bytes, [b0, b1, b2, b3], r);
-      await finishTrust(r, trusted);
+      await finishTrust(r, trusted, pool);
     } catch (e) { r.problems.push('Could not read this signature: ' + (e.message || e)); r.status = 'invalid'; }
     out.push(r);
   }
@@ -212,11 +212,11 @@ export function describeSigner(s) { if (!s) return ''; const n = s.subject; retu
 
 
 /** Computes the Acrobat-style status: valid / unknown / invalid, using the certificate chain and the user's trusted list. */
-async function finishTrust(r, trusted) {
+async function finishTrust(r, trusted, pool = []) {
   r.integrityOk = r.digestOk !== false && r.sigOk === true && !r.problems.some(p => /does not match|altered|invalid|unsupported|could not|not embedded|empty/i.test(p) && !/outside the certificate/i.test(p));
   if (!r.signerCert) { r.status = r.sigOk === false || r.digestOk === false ? 'invalid' : 'unknown'; return; }
   const when = r.signTime || new Date();
-  const ch = await buildChain(r.signerCert, r.certs, trusted); r.chain = ch.chain; r.chainTrusted = ch.trustedAt >= 0; r.chainProblems = ch.problems;
+  const ch = await buildChain(r.signerCert, [...r.certs, ...pool], trusted); r.chain = ch.chain; r.chainTrusted = ch.trustedAt >= 0; r.chainProblems = ch.problems; r.chainBuiltin = ch.trustedAt >= 0 && !!ch.chain[ch.trustedAt].builtin;
   r.expired = ch.chain.slice(0, ch.trustedAt >= 0 ? ch.trustedAt + 1 : ch.chain.length).some(c => (c.notBefore && when < c.notBefore) || (c.notAfter && when > c.notAfter));
   if (r.digestOk === false || r.sigOk === false) r.status = 'invalid';
   else if (r.sigOk !== true) r.status = 'unknown';

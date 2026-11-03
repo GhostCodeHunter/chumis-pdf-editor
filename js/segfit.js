@@ -35,6 +35,7 @@ export function sampleColors(info, seg) {
 }
 
 const INK = 120; // colour distance from the background that counts as "ink"
+const RULE = 230; // a table rule is dark; a light-grey watermark stem (distance ~120) must not count as one
 
 /**
  * Real horizontal extent of a text segment (from the pixels), plus a stem-thickness figure used to tell bold from regular.
@@ -51,11 +52,12 @@ export function fitSegment(info, seg) {
     const P = pixels(info, left, seg.top, width, seg.h); if (!P) throw 0;
     const { d, W, H, sx } = P;
     const cnt = new Uint16Array(W);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (dist(d, (y * W + x) * 4, rgb) > INK) cnt[x]++;
+    const rule = new Uint16Array(W);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const t = dist(d, (y * W + x) * 4, rgb); if (t > INK) cnt[x]++; if (t > RULE) rule[x]++; }
     // vertical rules: a thin band of columns that is inked from top to bottom of the line box
     const border = new Uint8Array(W), maxBand = Math.max(4, Math.ceil(2.6 * sx));
     for (let x = 0; x < W;) {
-      if (cnt[x] >= Math.max(5, H * 0.92)) { let e = x; while (e + 1 < W && cnt[e + 1] >= Math.max(5, H * 0.92)) e++; if (e - x + 1 <= maxBand) for (let k = x; k <= e; k++) border[k] = 1; x = e + 1; } else x++;
+      if (rule[x] >= Math.max(5, H * 0.92)) { let e = x; while (e + 1 < W && rule[e + 1] >= Math.max(5, H * 0.92)) e++; if (e - x + 1 <= maxBand) for (let k = x; k <= e; k++) border[k] = 1; x = e + 1; } else x++;
     }
     const start = Math.max(0, Math.floor((seg.x - 1 - P.x0 / sx) * sx));
     const gapMax = Math.ceil(1.3 * seg.fs * sx);
@@ -115,7 +117,7 @@ export function detectKeep(info, a, bg) {
   try {
     const P = pixels(info, a.x - 1, a.y, a.coverW + 2, a.h); if (!P || P.W < 3 || P.H < 3) return out;
     const { d, W, H, sx } = P, rgb = hexRgb(bg), maxBand = Math.max(4, Math.ceil(2.6 * sx));
-    const LINE = 90;
+    const LINE = RULE;
     const colorAt = (x, y) => { const i = (y * W + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
     const bands = (len, count, total) => {
       const res = []; const ok = i => count(i) >= total * 0.9;
@@ -155,8 +157,8 @@ export function splitAtRules(info, segs) {
       const { d, W, H, sx } = P; const maxBand = Math.max(4, Math.ceil(2.6 * sx));
       let found = false;
       for (let x = 0; x < W && !found;) {
-        let c = 0; for (let y = 0; y < H; y++) if (dist(d, (y * W + x) * 4, rgb) > 90) c++;
-        if (c >= Math.max(5, H * 0.9)) { let e = x; for (;;) { if (e + 1 >= W) break; let c2 = 0; for (let y = 0; y < H; y++) if (dist(d, (y * W + e + 1) * 4, rgb) > 90) c2++; if (c2 >= Math.max(5, H * 0.9)) e++; else break; } if (e - x + 1 <= maxBand) found = true; x = e + 1; } else x++;
+        let c = 0; for (let y = 0; y < H; y++) if (dist(d, (y * W + x) * 4, rgb) > RULE) c++;
+        if (c >= Math.max(5, H * 0.9)) { let e = x; for (;;) { if (e + 1 >= W) break; let c2 = 0; for (let y = 0; y < H; y++) if (dist(d, (y * W + e + 1) * 4, rgb) > RULE) c2++; if (c2 >= Math.max(5, H * 0.9)) e++; else break; } if (e - x + 1 <= maxBand) found = true; x = e + 1; } else x++;
       }
       if (found) cuts.push(k);
     }

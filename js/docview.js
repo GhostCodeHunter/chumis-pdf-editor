@@ -386,7 +386,10 @@ export class DocView {
 
   /** Prints the document exactly as it would be saved (edits, signatures and stamps included). */
   async print() {
-    const bytes = await withProgress('Preparing to print', async p => this.doc.bake({ onProgress: (f, t) => p.update(f, t) }));
+    const bytes = await withProgress('Preparing to print', async p => {
+      const out = await this.doc.bake({ onProgress: (f, t) => p.update(f, t) });
+      return out && this.sigApi ? (await import('./signatures.js')).stampForPrint(this, out) : out; // the printout shows the signature's validation result like the screen does
+    });
     if (!bytes) return;
     printBlob(new Blob([bytes], { type: 'application/pdf' }));
     toast('Opening the print dialog…', 'info', 2500);

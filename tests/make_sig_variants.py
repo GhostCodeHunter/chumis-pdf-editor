@@ -76,6 +76,10 @@ def ordered(c, *extra):
     run('openssl','cms','-sign','-binary','-in',P('content.bin'),'-signer',lc,'-inkey',lk,'-certfile',allc,'-nocerts','-outform','DER','-out',P('sig.der'),'-md','sha256',*extra); return open(P('sig.der'),'rb').read()
 emit('cert-last',        'adbe.pkcs7.detached', lambda c: ordered(c))
 emit('cert-last-keyid',  'adbe.pkcs7.detached', lambda c: ordered(c, '-keyid'))
+# only the signer's own certificate is embedded; the CA in between must come from the built-in pool
+leafonly = P('leaf.pem'); open(leafonly,'wb').write(open(lc,'rb').read())
+def leaf_only(c): run('openssl','cms','-sign','-binary','-in',P('content.bin'),'-signer',lc,'-inkey',lk,'-certfile',leafonly,'-nocerts','-outform','DER','-out',P('sig.der'),'-md','sha256'); return open(P('sig.der'),'rb').read()
+emit('leaf-only-needs-pool', 'adbe.pkcs7.detached', leaf_only)
 # tampered after signing (must be INVALID)
 emit('detached-sha256-tampered', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'))
 tp = os.path.join(OUT, 'detached-sha256-tampered.pdf'); raw = open(tp,'rb').read(); open(tp,'wb').write(raw.replace(b'/Reason (Testing)', b'/Reason (Testinh)', 1))

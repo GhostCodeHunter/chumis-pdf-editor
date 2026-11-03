@@ -131,3 +131,15 @@ Source code: **MIT** (see `LICENSE`). Third-party components keep their own lice
 PDF.js (Apache-2.0), pdf-lib (MIT), JSZip (MIT), PptxGenJS (MIT), Tesseract.js (Apache-2.0), Material Design Icons (Apache-2.0), Poppins (SIL OFL 1.1). Google Fonts you pick in the editor are served by Fontsource/jsDelivr under their own licences (OFL / Apache-2.0).
 
 *Adobe and Acrobat are trademarks of Adobe Inc. This project is not affiliated with or endorsed by Adobe, UIDAI, the Income Tax Department, GSTN, the Ministry of Corporate Affairs or the Controller of Certifying Authorities.*
+
+
+## Built-in trust for Indian signatures
+
+Signatures on Indian government documents (GST, e-Aadhaar, e-Mudhra, ...) validate on their own, as they do in Acrobat on a PC that trusts the Root CA of India. `vendor/trust/india-pki.json` holds the CCA India roots (2007, 2011, 2014, 2022, 2022 SPL) and the licensed-CA certificates under them. It is built by `tools/build_trust.py`, which refuses any root that does not match:
+
+| Root | SHA-256 (DER) |
+| --- | --- |
+| CCA India 2022 | `9a3fd3176798e842ddcb12c262f11cfacca70a8b84c6ea6fda30842a95a94cd8` |
+| CCA India 2022 SPL | `b724689b79b2ef9421ef8f5cc733eb093851b170ee715177005a09f226d8c91a` |
+
+The older (expired) roots were cross-checked as byte-identical in two independent sources and match the names and validity listed on cca.gov.in. Every other certificate is kept only if its signature chain verifies up to one of these roots. Certificate revocation (CRL/OCSP) is not consulted, because a browser cannot reach the CAs' servers. You can still add your own trusted certificates in the Signatures panel.

@@ -2,7 +2,9 @@
 // certificate viewer and a "trusted certificates" list (e.g. the CCA India root).
 import { h, icon, button, toast, dialog, popupMenu, pickFiles, readBytes, withProgress } from './ui.js';
 import { inspectSignatures, parseCertFile, fingerprint, describeSigner } from './sigcheck.js';
-import { openPdfJs, destroyPdf, renderToCanvas, PDFLib, pdfjsLib } from './pdfio.js';
+import { openPdfJs, destroyPdf, renderToCanvas, canvasToBytes, PDFLib, pdfjsLib } from './pdfio.js';
+import { pageGeom } from './bake.js';
+import { trustArgs } from './trustbundle.js';
 
 /* ------------------------------------------------------------------ trusted certificates (stored on this device only) */
 const KEY = 'chumi.trust.v1';
@@ -38,7 +40,7 @@ export function findings(s) {
   else if (s.sigOk === true && s.modifiedAfter) L.push(['warn', 'The signature itself is intact, but the file was changed after it was applied (later edits or another signature). Use “Compare Signed Version to Current Version” to see what changed.']);
   else if (s.sigOk === true) L.push(['ok', 'The document has not been modified since this signature was applied.']);
   else L.push(['warn', 'The signature value could not be checked.']);
-  if (s.chainTrusted) L.push(['ok', `The signer’s identity is valid: its certificate chain leads to a certificate you trust (${(s.chain[s.chain.length - 1].subject.CN) || 'trusted root'}).`]);
+  if (s.chainTrusted) L.push(['ok', s.chainBuiltin ? `The signer’s identity is valid: its certificate chain leads to ${(s.chain[s.chain.length - 1].subject.CN) || 'a trusted root'}, a root certificate built into this app (India’s Controller of Certifying Authorities).` : `The signer’s identity is valid: its certificate chain leads to a certificate you trust (${(s.chain[s.chain.length - 1].subject.CN) || 'trusted root'}).`]);
   else L.push(['warn', 'The signer’s identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.']);
   if (s.signer?.selfSigned) L.push(['warn', 'The certificate is self-signed — anyone can create one.']);
   if (s.expired) L.push(['warn', 'A certificate in the chain was outside its validity period at the time of signing.']);
@@ -172,12 +174,12 @@ async function findWidgets(dv, sigs) {
 
 export async function attach(dv) {
   const doc = dv.doc; if (doc.originalBytes !== doc.bytes) return;
-  let sigs; try { sigs = await inspectSignatures(doc.originalBytes, { trusted: loadTrusted() }); } catch (e) { console.warn(e); return; }
+  let sigs; try { sigs = await inspectSignatures(doc.originalBytes, await trustArgs(loadTrusted())); } catch (e) { console.warn(e); return; }
   doc.sigs = sigs;
   const api = dv.sigApi = {
     sigs,
     clear() { dv.sigBarEl.hidden = true; dv.sigBarEl.replaceChildren(); dv.viewer.pages.forEach(p => p.sigEl.replaceChildren()); dv.railEl.querySelector('[data-id=signatures]')?.classList.remove('has-badge'); doc.sigs = []; },
-    async revalidate() { doc.sigs = api.sigs = await inspectSignatures(doc.originalBytes, { trusted: loadTrusted() }); try { await findWidgets(dv, api.sigs); } catch {} render(); dv.panelApi?.refresh?.(); },
+    async revalidate() { doc.sigs = api.sigs = await inspectSignatures(doc.originalBytes, await trustArgs(loadTrusted())); try { await findWidgets(dv, api.sigs); } catch {} render(); dv.panelApi?.refresh?.(); },
     render: () => render(),
   };
   if (!sigs.length) return;
@@ -213,11 +215,14 @@ export async function attach(dv) {
 
 /* ------------------------------------------------------------------ Adobe-style signature appearance */
 const SVGNS = 'http://www.w3.org/2000/svg';
+const MARKS = { // flat colour, heavy black outline, hard black shadow to the lower right (the Acrobat look); points are in a 0–100 box
+  ok: { pts: '1,55 14,44 33,67 82,0 100,12 40,100', fill: '#1cb04a', label: 'Signature valid' },
+  bad: { pts: '12,28 28,12 50,34 72,12 88,28 66,50 88,72 72,88 50,66 28,88 12,72 34,50', fill: '#e0231d', label: 'Signature invalid' },
+  warn: { pts: '50,4 99,94 1,94', fill: '#f5b400', label: 'Valid, but changed after signing' },
+};
 function glyph(kind) {
-  // Acrobat's marks: a flat colour with a heavy black outline and a hard black drop shadow to the lower right.
   const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '-4 -4 116 116'); svg.setAttribute('class', 'sig-glyph ' + kind);
-  const pts = { ok: '1,55 14,44 33,67 82,0 100,12 40,100', bad: '12,28 28,12 50,34 72,12 88,28 66,50 88,72 72,88 50,66 28,88 12,72 34,50', warn: '50,4 99,94 1,94' }[kind];
-  const fill = { ok: '#1cb04a', bad: '#e0231d', warn: '#f5b400' }[kind];
+  const { pts, fill } = MARKS[kind];
   const poly = (attrs, parent) => { const p = document.createElementNS(SVGNS, 'polygon'); p.setAttribute('points', pts); for (const k in attrs) p.setAttribute(k, attrs[k]); parent.append(p); };
   const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(6 5)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
   poly({ fill, stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, svg);
@@ -246,14 +251,48 @@ function cleanedField(info, w) {
   } catch { return null; }
 }
 /** Acrobat-style result drawn over the signature field: its wording in the top line and a large tick / cross / warning. */
+const markKind = s => (s.status === 'invalid' ? 'bad' : s.status === 'valid' ? (s.modifiedAfter ? 'warn' : 'ok') : null);
 function fieldSkin(info, w, s) {
-  const kind = s.status === 'invalid' ? 'bad' : s.status === 'valid' ? (s.modifiedAfter ? 'warn' : 'ok') : null;
+  const kind = markKind(s);
   if (!kind) return null; // “unknown” keeps the file's own “?” — which is what Acrobat shows too
   const oc = cleanedField(info, w); if (!oc) return null;
-  const label = { ok: 'Signature valid', bad: 'Signature invalid', warn: 'Valid, but changed after signing' }[kind];
+  const label = MARKS[kind].label;
   const size = Math.min(w.h * 0.7, w.w * 0.3);
   return h('div.sig-skin', oc, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label),
     (() => { const g = glyph(kind); const side = size * 1.16; g.style.width = g.style.height = side + 'px'; g.style.left = (w.w * 0.393 - size * 0.04) + 'px'; g.style.top = (w.h * 0.178 - size * 0.04) + 'px'; return g; })());
+}
+
+/**
+ * Printing: the validation result is drawn into the copy that goes to the printer (it is never written into the saved file).
+ * Acrobat's own result marks are not part of a PDF, so without this a printout only shows the file's “Signature Not Verified”.
+ */
+export async function stampForPrint(dv, bytes) {
+  try {
+    const sigs = (dv.sigApi?.sigs || []).filter(x => x.widget && markKind(x)); if (!sigs.length) return bytes;
+    const hex = c => { const n = parseInt(c.slice(1), 16); return PDFLib.rgb((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
+    const pdf = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false }); const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+    for (const s of sigs) {
+      const w = s.widget, page = pdf.getPages()[w.page]; if (!page) continue;
+      const kind = dv.doc.hasEdits() && s.status === 'valid' ? 'warn' : markKind(s);   // a printout that includes edits is not the signed document
+      const info = { canvas: await renderToCanvas(dv.doc.pdf, w.page, 3), w: dv.viewer.pages[w.page].w };
+      const oc = cleanedField(info, w); if (!oc) continue;                              // no fallback look in this field: print it as it is
+      try { const form = pdf.getForm(), f = form.getFields().find(x => x instanceof PDFLib.PDFSignature && x.getName() === w.name); if (f) form.removeField(f); } catch {} // viewers draw a field's own look above the page, so it has to go for the marks to show
+      const img = await pdf.embedPng(await canvasToBytes(oc, 'image/png'));
+      const g = pageGeom(page), Y = y => g.H - y, M = MARKS[kind];
+      page.pushOperators(PDFLib.pushGraphicsState(), PDFLib.concatTransformationMatrix(...g.m));
+      page.drawImage(img, { x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h });
+      page.drawRectangle({ x: w.x, y: Y(w.y + w.h * 0.31), width: w.w, height: w.h * 0.31, color: PDFLib.rgb(1, 1, 1) });
+      const fs = w.h * 0.2; page.drawText(M.label, { x: w.x + w.w * 0.016, y: Y(w.y + w.h * 0.155) - fs * 0.35, size: fs, font, color: PDFLib.rgb(0, 0, 0) });
+      const size = Math.min(w.h * 0.7, w.w * 0.3), k = size / 100, ox = w.x + w.w * 0.393, oy = w.y + w.h * 0.178;
+      const path = 'M' + M.pts.split(' ').join(' L') + ' Z';
+      page.drawSvgPath(path, { x: ox + 6 * k, y: Y(oy + 5 * k), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 4 });
+      page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: hex(M.fill), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 4 });
+      if (kind === 'warn') { page.drawRectangle({ x: ox + 46 * k, y: Y(oy + 68 * k), width: 8 * k, height: 30 * k, color: PDFLib.rgb(0, 0, 0) }); page.drawRectangle({ x: ox + 46.5 * k, y: Y(oy + 82 * k), width: 7 * k, height: 8 * k, color: PDFLib.rgb(0, 0, 0) }); }
+      page.drawRectangle({ x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h, borderColor: PDFLib.rgb(0.33, 0.33, 0.33), borderWidth: 0.6, borderDashArray: [1, 2] });
+      page.pushOperators(PDFLib.popGraphicsState());
+    }
+    return await pdf.save({ useObjectStreams: true });
+  } catch (e) { console.warn('Could not add the validation marks to the print copy', e); return bytes; }
 }
 
 /* ------------------------------------------------------------------ panel */
@@ -276,7 +315,8 @@ export function mountPanel(dv, el) {
     });
     trust.replaceChildren();
     const t = trustList();
-    if (!t.length) trust.append(h('p.hint', 'None yet. Signatures from Indian authorities show as “unknown” until you add the CCA India root certificate.'));
+    trust.append(h('div.sg-trusted', icon('certificate', 18), h('div', h('strong', 'Built in: India’s Root CA (CCA India 2022 and earlier roots)'), h('div.hint', 'and the licensed CAs under them (e-Mudhra, (n)Code, NIC, Capricorn, …). Signatures chaining to these are valid automatically.'))));
+    if (!t.length) trust.append(h('p.hint', 'Nothing added by you. Use “Import certificate” for any other authority you trust.'));
     t.forEach(e => trust.append(h('div.sg-trusted', icon('certificate', 18), h('div', h('strong', e.name), h('div.hint', e.fp.slice(0, 29) + '…')), button({ icon: 'trash', kind: 'ghost', size: 'sm', title: `Remove ${e.name} from trusted certificates`, onClick: async () => { removeTrusted(e.fp); await dv.sigApi?.revalidate(); draw(); } }))));
   };
   const importBtn = button({ label: 'Import certificate…', icon: 'import', size: 'sm', onClick: async () => {
@@ -287,7 +327,7 @@ export function mountPanel(dv, el) {
   } });
   el.append(dv.panelHeader('Digital signatures', 'Validate who signed this document and whether it changed.'),
     h('div.panel-b', list,
-      h('div.panel-sec', h('h3', 'Trusted certificates'), h('p.hint', 'Like Acrobat, a signature is “valid” only when its certificate chain leads to a certificate you trust. Indian signatures chain to the Root CA of India (CCA); download its root certificate from cca.gov.in and import it here once.'), trust, importBtn,
+      h('div.panel-sec', h('h3', 'Trusted certificates'), h('p.hint', 'Like Acrobat, a signature is “valid” only when its certificate chain leads to a certificate that is trusted. India’s CCA roots are built in; add any other authority yourself. Indian signatures chain to the Root CA of India (CCA); download its root certificate from cca.gov.in and import it here once.'), trust, importBtn,
         h('a.btn.btn-ghost.btn-sm', { href: 'https://cca.gov.in/root_certificate.html', target: '_blank', rel: 'noopener noreferrer' }, icon('external', 16), h('span', 'CCA India root certificates'))),
       h('div.note-box', icon('lock', 16), h('span', 'Trusted certificates are saved only in this browser. Validation happens on your device; revocation lists are not consulted.'))));
   draw();

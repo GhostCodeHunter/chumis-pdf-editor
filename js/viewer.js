@@ -178,7 +178,7 @@ export class Viewer extends EventTarget {
     const segs = await this.segmentsFor(i);
     if (!this.hitMode) return;
     segs.forEach(s => {
-      const w = s.ocr ? s.w : fitSegment(p, s).w;
+      const w = s.w;
       const b = h('div.hit', { style: { left: s.x - 2 + 'px', top: s.top + 'px', width: w + 4 + 'px', height: s.h + 'px' }, title: 'Click to edit this text' });
       b.addEventListener('click', e => { e.stopPropagation(); this.dispatchEvent(new CustomEvent('edit-segment', { detail: { page: i, seg: s } })); });
       p.hitEl.append(b);

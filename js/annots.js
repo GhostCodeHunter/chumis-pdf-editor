@@ -1,7 +1,7 @@
 // Annotation editing on top of the viewer: create, select, move, resize, edit text, mark up, undo.
 import { h, uid, clamp, toast, pickFiles, readBytes } from './ui.js';
 import { BASELINE, CSS_FONT, LINE_HEIGHT } from './bake.js';
-import { getFontInfo } from './pdfio.js';
+import { getFontInfo, segmentOps, renderPatch, canvasToBytes } from './pdfio.js';
 import { isCustom, cssFamilyFor, ensureFont, isLoaded, probeBase } from './fonts.js';
 import { sampleColors, fitSegment, chooseFamily, detectKeep, matchPdfFont } from './segfit.js';
 export { sampleColors };
@@ -99,10 +99,12 @@ export class Annots extends EventTarget {
         S.fontWeight = a.bold ? '700' : '400'; S.fontStyle = a.italic ? 'italic' : 'normal'; S.color = a.color; S.opacity = op;
         if (a.type === 'text') { S.width = px(a.w); S.textAlign = a.align || 'left'; if (a.bg) S.background = a.bg; }
         else {
-          S.minWidth = px(a.coverW); S.height = px(a.h);
+          S.minWidth = px(a.patch ? Math.max(a.coverW, a.patch.x + a.patch.w - a.x) : a.coverW); S.height = px(a.patch ? Math.max(a.h, a.patch.y + a.patch.h - a.y) : a.h);
           const keep = a.keep || [];
-          S.background = [...keep.map(k => `linear-gradient(${k.c},${k.c}) ${k.x - a.x}px ${k.y - a.y}px / ${k.w}px ${k.h}px no-repeat`), a.bg || '#fff'].join(',');
-          S.boxShadow = keep.length ? 'none' : `0 0 0 1px ${a.bg || '#fff'}`;
+          const pu = a.patch && this.doc.assets.get(a.patch.id)?.url;
+          if (pu) { S.background = `url(${pu}) ${a.patch.x - a.x}px ${a.patch.y - a.y}px / ${a.patch.w}px ${a.patch.h}px no-repeat, ${a.bg || '#fff'}`; S.boxShadow = 'none'; }
+          else S.background = [...keep.map(k => `linear-gradient(${k.c},${k.c}) ${k.x - a.x}px ${k.y - a.y}px / ${k.w}px ${k.h}px no-repeat`), a.bg || '#fff'].join(',');
+          if (!pu) S.boxShadow = keep.length ? 'none' : `0 0 0 1px ${a.bg || '#fff'}`;
         }
         el.textContent = a.text;
         if (isCustom(a.font) && !isLoaded(a)) ensureFont(a).then(r => { if (r) this.fontReady(a); });
@@ -399,6 +401,8 @@ export class Annots extends EventTarget {
     const info = this.viewer.pages[pi];
     const fi = seg.fontName ? await getFontInfo(this.doc.pdf, pi, seg.fontName) : {};
     const fit = seg.ocr ? { w: seg.w, bold: false } : fitSegment(info, seg); // the real width of the text, not the width the PDF reports
+    const boxes = seg.ocr ? [] : await segmentOps(this.doc.pdf, pi, seg);          // the exact drawing operations of this run of text
+    if (boxes.length) fit.w = Math.max(4, Math.min(seg.w + 3, Math.max(...boxes.map(b => b.x1)) - seg.x));
     const fam = chooseFamily(seg, fi, fit);
     const size = +seg.fs.toFixed(1);
     const { bg, fg } = sampleColors(info, { ...seg, w: fit.w });
@@ -407,10 +411,24 @@ export class Annots extends EventTarget {
       text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold || !!fit.bold, italic: !!fi.italic, color: fg, bg,
     };
     const match = seg.ocr ? null : matchPdfFont(fi.name); // upgraded to the PDF's own typeface once it has loaded (below)
-    if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // table borders / rules inside the covered box stay visible
+    // the area under the old text is redrawn from the page itself WITHOUT that text, so watermarks, table rules and tints stay exactly as they were
+    const patch = boxes.length ? await this.makePatch(pi, boxes, a) : null;
+    if (patch) a.patch = patch;
+    else if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // fallback: plain cover, with the borders inside it redrawn
     this.doc.pages[pi].annots.push(a);
     this.repaint(a, pi); this.select(a, pi); this.beginEdit(a, pi, true, true);
     if (match) this.useMatchingFont(a, pi, match, size, seg.baseline);
+  }
+
+  async makePatch(pi, boxes, a) {
+    try {
+      // generous on purpose: the patch is the page itself drawn without this text, so anything else inside it (rules, tints, watermark, neighbours) looks unchanged
+      const x0 = Math.min(a.x - 1, ...boxes.map(b => b.x0)) - 1, x1 = Math.max(a.x + a.coverW + 1, ...boxes.map(b => b.x1)) + 1;
+      const y0 = Math.min(a.y, ...boxes.map(b => b.y0)) - 0.5, y1 = Math.max(a.y + a.h, ...boxes.map(b => b.y1)) + 0.5;
+      const rect = { x: +x0.toFixed(2), y: +y0.toFixed(2), w: +(x1 - x0).toFixed(2), h: +(y1 - y0).toFixed(2) };
+      const c = await renderPatch(this.doc.pdf, pi, rect, new Set(boxes.map(b => b.i)), 6);
+      return { id: this.doc.addAsset(await canvasToBytes(c, 'image/png'), 'image/png'), ...rect };
+    } catch (e) { console.warn('Could not redraw the background under the text', e); return null; }
   }
 
   /** Switches an edited line to the same typeface as the PDF (Arial → Arimo, …) as soon as it is available; keeps the built-in look-alike if it never loads. */
