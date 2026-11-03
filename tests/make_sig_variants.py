@@ -12,13 +12,19 @@ def run(*a, **k): return subprocess.run(a, check=True, capture_output=True, **k)
 tmp = tempfile.mkdtemp()
 P = lambda n: os.path.join(tmp, n)
 
-def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b'', appearance=False):
+def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b'', appearance=False, vector_q=False):
     body = base + (b'\n' if not base.endswith(b'\n') else b'')
     sig = (f'{sig_num} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /{subfilter} /ByteRange [0 0000000000 0000000000 0000000000] /Contents <').encode() + b'0' * siglen + b'> /M (D:20260919174500+05\'30\') /Name (DS Test) /Reason (Testing) >>\nendobj\n'
     ap_num = widget_num + 1
     widget = f'{widget_num} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V {sig_num} 0 R /Rect [60 560 330 640] /F 132 /P 4 0 R {"/AP << /N " + str(ap_num) + " 0 R >>" if appearance else ""} >>\nendobj\n'.encode()
     if appearance:   # the layout many Indian government signers use: a "Signature Not Verified" line, a yellow ? and the signer text
-        content = b'q 1 1 1 rg 0 0 270 80 re f Q BT /F1 9 Tf 4 66 Td 0 g (Signature Not Verified) Tj ET BT /F2 46 Tf 110 14 Td 1 0.82 0 rg (?) Tj ET BT /F1 8 Tf 4 44 Td 0 g (Digitally signed by DS GOODS AND) Tj 0 -10 Td (SERVICES TAX NETWORK 11) Tj 0 -10 Td (Date: 2026.09.19 19:15:18 IST) Tj ET'
+        text = b'BT /F1 9 Tf 4 66 Td 0 g (Signature Not Verified) Tj ET BT /F1 8 Tf 4 44 Td 0 g (Digitally signed by DS GOODS AND) Tj 0 -10 Td (SERVICES TAX NETWORK 11) Tj 0 -10 Td (Date: 2026.09.19 19:15:18 IST) Tj ET'
+        if vector_q:   # a drawn ? (yellow fill + dark outline, with a separate black shadow shape) painted OVER the text, as in many government PDFs
+            qpath = b'm 112 52 c 112 62 142 62 142 50 c 142 40 128 40 128 30 l 120 30 l 120 42 c 120 50 134 50 134 54 c 134 58 120 58 120 52 Z 120 20 m 128 20 l 128 12 l 120 12 Z'
+            qpath = b'112 52 m 112 64 144 64 144 50 c 144 40 130 40 130 30 l 120 30 l 120 42 c 120 48 134 48 134 53 c 134 57 122 57 122 52 l h 120 20 m 130 20 l 130 10 l 120 10 l h'
+            qpath = b'112 52 m 112 64 144 64 144 50 c 144 40 130 40 130 30 c 120 30 l 120 42 c 120 48 134 48 134 53 c 134 57 122 57 122 52 c 112 52 l h 120 20 m 130 20 l 130 10 l 120 10 l h'
+            content = b'q 1 1 1 rg 0 0 270 80 re f Q ' + text + b' q 1 0 0 1 2 -2 cm 0 g ' + qpath.replace(b'112 52 m 112 64 144 64 144 50 c 144 40 130 40 130 30 c 120 30 l 120 42 c 120 48 134 48 134 53 c 134 57 122 57 122 52 c 112 52 l h', b'112 52 m 112 64 144 64 144 50 c 144 40 130 40 130 30 l 120 30 l 120 42 c 120 48 134 48 134 53 c 134 57 122 57 122 52 l h').replace(b' c ', b' l ') + b' f Q q 1 0.82 0 rg 0.2 G 1.2 w ' + qpath.replace(b' c ', b' l ') + b' B Q'
+        else: content = b'q 1 1 1 rg 0 0 270 80 re f Q ' + text.replace(b'BT /F1 8 Tf 4 44', b'BT /F2 46 Tf 110 14 Td 1 0.82 0 rg (?) Tj ET BT /F1 8 Tf 4 44')
         widget += f'{ap_num} 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 270 80] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> >> >> /Length {len(content)} >>\nstream\n'.encode() + content + b'\nendstream\nendobj\n'
     page = b'4 0 obj\n<<' + page_obj.rstrip() + b' /Annots [ ' + f'{widget_num} 0 R'.encode() + b' ] >>\nendobj\n'
     root = b'5 0 obj\n<<' + root_obj.rstrip() + b' /AcroForm << /Fields [ ' + f'{widget_num} 0 R'.encode() + b' ] /SigFlags 3 >> >>\nendobj\n'
@@ -50,8 +56,8 @@ def cms(content_path, *flags):
     run('openssl','cms','-sign','-binary','-in',content_path,'-signer',lc,'-inkey',lk,'-certfile',chain,'-outform','DER','-out',P('sig.der'),*flags)
     return open(P('sig.der'),'rb').read()
 
-def emit(name, subfilter, builder, siglen=16384, appearance=False):
-    full, i, j = pdf_with_placeholder(siglen, subfilter, appearance=appearance)
+def emit(name, subfilter, builder, siglen=16384, appearance=False, vector_q=False):
+    full, i, j = pdf_with_placeholder(siglen, subfilter, appearance=appearance, vector_q=vector_q)
     content = full[:i] + full[j:]; open(P('content.bin'),'wb').write(content)
     der = builder(content); hx = der.hex().encode(); assert len(hx) <= siglen - 2, (name, len(hx))
     signed = full[:i+1] + hx + b'0' * (siglen - len(hx)) + full[j-1:]; assert len(signed) == len(full)
@@ -59,6 +65,7 @@ def emit(name, subfilter, builder, siglen=16384, appearance=False):
 
 emit('detached-sha256',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'))
 emit('appearance-adobe', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), appearance=True)
+emit('appearance-vector', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), appearance=True, vector_q=True)
 emit('detached-sha1',    'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha1'))
 emit('detached-sha512',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha512'))
 emit('stream-ber',       'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256', '-stream'))

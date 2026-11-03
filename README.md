@@ -143,3 +143,5 @@ Signatures on Indian government documents (GST, e-Aadhaar, e-Mudhra, ...) valida
 | CCA India 2022 SPL | `b724689b79b2ef9421ef8f5cc733eb093851b170ee715177005a09f226d8c91a` |
 
 The older (expired) roots were cross-checked as byte-identical in two independent sources and match the names and validity listed on cca.gov.in. Every other certificate is kept only if its signature chain verifies up to one of these roots. Certificate revocation (CRL/OCSP) is not consulted, because a browser cannot reach the CAs' servers. You can still add your own trusted certificates in the Signatures panel.
+
+Password-protected signed files (e-Aadhaar, e-PAN) are checked on their original bytes, as Acrobat does, so open them with the password and the result appears at once. Older Adobe signature styles (`adbe.pkcs7.sha1`, as used by several state portals), RSA-PSS and signatures whose signer certificate is named by key id are supported. Printing draws the validation result into the print copy only; locked files are printed from their page pictures.

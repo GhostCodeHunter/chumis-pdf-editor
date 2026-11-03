@@ -83,24 +83,27 @@ export function clearTextCache(pdf) { textCache.delete(pdf); opCache.delete(pdf)
 
 /* --- the page drawn WITHOUT a given piece of text (keeps watermarks, table rules, tints and images exactly as they are) --- */
 const opCache = new WeakMap();
-/** Bounding box of every text-showing operation on a page, in display points (origin top-left). pdf.js records them coarsely (about 1/256 of the page). */
-export async function textOpBoxes(pdf, i) {
+/** Bounding box (display points, origin top-left) and operator code of every drawing operation on a page. pdf.js records the boxes coarsely (about 1/256 of the page). */
+export async function opBoxes(pdf, i) {
   let per = opCache.get(pdf); if (!per) opCache.set(pdf, per = new Map());
   if (per.has(i)) return per.get(i);
   const job = (async () => {
     const page = await pdf.getPage(i + 1); const vp = page.getViewport({ scale: 1 });
     const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
     await page.render({ canvasContext: c.getContext('2d'), canvas: c, viewport: vp, recordOperations: true }).promise;
-    const rb = page.recordedBBoxes; if (!rb || !rb.length) return [];
-    const ol = await page.getOperatorList(), O = pdfjsLib.OPS, out = [];
-    ol.fnArray.forEach((f, k) => {
-      if (f !== O.showText && f !== O.showSpacedText && f !== O.nextLineShowText && f !== O.nextLineSetSpacingShowText) return;
+    const rb = page.recordedBBoxes; if (!rb || !rb.length) return { fn: [], boxes: [] };
+    const ol = await page.getOperatorList(), boxes = [];
+    for (let k = 0; k < ol.fnArray.length; k++) {
       const x0 = rb.minX(k) * c.width, x1 = rb.maxX(k) * c.width, y0 = rb.minY(k) * c.height, y1 = rb.maxY(k) * c.height;
-      if (x1 > x0 && y1 > y0) out.push({ i: k, x0, x1, y0, y1 });
-    });
-    return out;
-  })().catch(() => []);
+      if (x1 > x0 && y1 > y0) boxes.push({ i: k, fn: ol.fnArray[k], x0, x1, y0, y1 });
+    }
+    return { fn: ol.fnArray, boxes };
+  })().catch(() => ({ fn: [], boxes: [] }));
   per.set(i, job); return job;
+}
+export async function textOpBoxes(pdf, i) {
+  const O = pdfjsLib.OPS;
+  return (await opBoxes(pdf, i)).boxes.filter(b => b.fn === O.showText || b.fn === O.showSpacedText || b.fn === O.nextLineShowText || b.fn === O.nextLineSetSpacingShowText);
 }
 /** The text operations that draw exactly this run of text (and nothing beside it), with their boxes. */
 export async function segmentOps(pdf, i, seg) {

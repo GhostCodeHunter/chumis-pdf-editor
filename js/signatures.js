@@ -4,6 +4,7 @@ import { h, icon, button, toast, dialog, popupMenu, pickFiles, readBytes, withPr
 import { inspectSignatures, parseCertFile, fingerprint, describeSigner } from './sigcheck.js';
 import { openPdfJs, destroyPdf, renderToCanvas, canvasToBytes, PDFLib, pdfjsLib } from './pdfio.js';
 import { pageGeom } from './bake.js';
+import { renderCleanField } from './fieldmark.js';
 import { trustArgs } from './trustbundle.js';
 
 /* ------------------------------------------------------------------ trusted certificates (stored on this device only) */
@@ -160,7 +161,7 @@ async function findWidgets(dv, sigs) {
     }
   }
   try {
-    const lib = await PDFDocument.load(dv.doc.originalBytes, { updateMetadata: false });
+    const lib = await PDFDocument.load(dv.doc.originalBytes, { updateMetadata: false, ignoreEncryption: true }); // password-protected files (e-Aadhaar, e-PAN) keep the structure readable
     for (const f of lib.getForm().getFields()) {
       if (!(f instanceof PDFLib.PDFSignature)) continue;
       const v = f.acroField.dict.lookup(PDFName.of('V')); if (!(v instanceof PDFDict)) continue;
@@ -202,9 +203,9 @@ export async function attach(dv) {
     dv.viewer.pages.forEach(p => p.sigEl.replaceChildren());
     for (const s of api.sigs) {
       const w = s.widget; if (!w || w.w < 4 || w.h < 4) continue; const st = statusOf(s); const info = dv.viewer.pages[w.page]; if (!info) continue;
-      const skin = fieldSkin(info, w, s);
-      const b = h('button.sig-badge.' + st.cls + (skin ? '.skinned' : ''), { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click for options`, 'aria-label': `${st.short}. Open signature options.`, 'aria-haspopup': 'menu' },
-        skin || h('span.sig-mark', icon(st.ic, 20)));
+      const b = h('button.sig-badge.' + st.cls, { type: 'button', style: { left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }, title: `${st.short} — click for options`, 'aria-label': `${st.short}. Open signature options.`, 'aria-haspopup': 'menu' },
+        h('span.sig-mark', icon(st.ic, 20)));
+      fieldSkin(dv, info, w, s).then(skin => { if (skin && b.isConnected) { b.classList.add('skinned'); b.replaceChildren(skin); } }).catch(e => console.warn('signature look', e));
       b.addEventListener('click', e => { e.stopPropagation(); signatureMenu(dv, s, b); });
       b.addEventListener('contextmenu', e => { e.preventDefault(); signatureMenu(dv, s, { getBoundingClientRect: () => ({ left: e.clientX, bottom: e.clientY }) }); });
       info.sigEl.append(b);
@@ -216,7 +217,7 @@ export async function attach(dv) {
 /* ------------------------------------------------------------------ Adobe-style signature appearance */
 const SVGNS = 'http://www.w3.org/2000/svg';
 const MARKS = { // flat colour, heavy black outline, hard black shadow to the lower right (the Acrobat look); points are in a 0–100 box
-  ok: { pts: '1,55 14,44 33,67 82,0 100,12 40,100', fill: '#1cb04a', label: 'Signature valid' },
+  ok: { pts: '10,48 0,56 38,100 100,12 82,1 36,72', fill: '#12b04a', label: 'Signature valid' },
   bad: { pts: '12,28 28,12 50,34 72,12 88,28 66,50 88,72 72,88 50,66 28,88 12,72 34,50', fill: '#e0231d', label: 'Signature invalid' },
   warn: { pts: '50,4 99,94 1,94', fill: '#f5b400', label: 'Valid, but changed after signing' },
 };
@@ -224,8 +225,8 @@ function glyph(kind) {
   const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '-4 -4 116 116'); svg.setAttribute('class', 'sig-glyph ' + kind);
   const { pts, fill } = MARKS[kind];
   const poly = (attrs, parent) => { const p = document.createElementNS(SVGNS, 'polygon'); p.setAttribute('points', pts); for (const k in attrs) p.setAttribute(k, attrs[k]); parent.append(p); };
-  const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(6 5)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
-  poly({ fill, stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, svg);
+  const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(3.5 3)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
+  poly({ fill, stroke: '#000', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, svg);
   if (kind === 'warn') { const r = document.createElementNS(SVGNS, 'path'); r.setAttribute('d', 'M46 38h8l-1.5 30h-5zM46.5 74h7v8h-7z'); r.setAttribute('fill', '#000'); svg.append(r); }
   return svg;
 }
@@ -252,13 +253,24 @@ function cleanedField(info, w) {
 }
 /** Acrobat-style result drawn over the signature field: its wording in the top line and a large tick / cross / warning. */
 const markKind = s => (s.status === 'invalid' ? 'bad' : s.status === 'valid' ? (s.modifiedAfter ? 'warn' : 'ok') : null);
-function fieldSkin(info, w, s) {
+/** The field without its fallback “?”: rendered from the page itself (nothing painted over); cached per field. */
+function cleanFieldFor(dv, info, w) {
+  const cache = (dv.sigApi._clean ||= new Map()), key = `${w.page}|${w.x.toFixed(1)}|${w.y.toFixed(1)}`;
+  if (!cache.has(key)) cache.set(key, (async () => {
+    let c = null; try { c = await renderCleanField(dv.doc.pdf, w.page, w, 4); } catch (e) { console.warn('field render', e); }
+    if (!c && info?.canvas?.width) c = cleanedField(info, w);   // last resort: recolour the “?” pixels in the visible page
+    return c;
+  })());
+  return cache.get(key);
+}
+async function fieldSkin(dv, info, w, s) {
   const kind = markKind(s);
   if (!kind) return null; // “unknown” keeps the file's own “?” — which is what Acrobat shows too
-  const oc = cleanedField(info, w); if (!oc) return null;
+  const oc = await cleanFieldFor(dv, info, w); if (!oc) return null;
   const label = MARKS[kind].label;
   const size = Math.min(w.h * 0.7, w.w * 0.3);
-  return h('div.sig-skin', oc, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label),
+  const view = document.createElement('canvas'); view.width = oc.width; view.height = oc.height; view.getContext('2d').drawImage(oc, 0, 0); // own copy: the cached one is reused
+  return h('div.sig-skin', view, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label),
     (() => { const g = glyph(kind); const side = size * 1.16; g.style.width = g.style.height = side + 'px'; g.style.left = (w.w * 0.393 - size * 0.04) + 'px'; g.style.top = (w.h * 0.178 - size * 0.04) + 'px'; return g; })());
 }
 
@@ -274,8 +286,7 @@ export async function stampForPrint(dv, bytes) {
     for (const s of sigs) {
       const w = s.widget, page = pdf.getPages()[w.page]; if (!page) continue;
       const kind = dv.doc.hasEdits() && s.status === 'valid' ? 'warn' : markKind(s);   // a printout that includes edits is not the signed document
-      const info = { canvas: await renderToCanvas(dv.doc.pdf, w.page, 3), w: dv.viewer.pages[w.page].w };
-      const oc = cleanedField(info, w); if (!oc) continue;                              // no fallback look in this field: print it as it is
+      const oc = await cleanFieldFor(dv, dv.viewer.pages[w.page], w); if (!oc) continue;  // no fallback look in this field: print it as it is
       try { const form = pdf.getForm(), f = form.getFields().find(x => x instanceof PDFLib.PDFSignature && x.getName() === w.name); if (f) form.removeField(f); } catch {} // viewers draw a field's own look above the page, so it has to go for the marks to show
       const img = await pdf.embedPng(await canvasToBytes(oc, 'image/png'));
       const g = pageGeom(page), Y = y => g.H - y, M = MARKS[kind];
@@ -285,10 +296,9 @@ export async function stampForPrint(dv, bytes) {
       const fs = w.h * 0.2; page.drawText(M.label, { x: w.x + w.w * 0.016, y: Y(w.y + w.h * 0.155) - fs * 0.35, size: fs, font, color: PDFLib.rgb(0, 0, 0) });
       const size = Math.min(w.h * 0.7, w.w * 0.3), k = size / 100, ox = w.x + w.w * 0.393, oy = w.y + w.h * 0.178;
       const path = 'M' + M.pts.split(' ').join(' L') + ' Z';
-      page.drawSvgPath(path, { x: ox + 6 * k, y: Y(oy + 5 * k), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 4 });
-      page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: hex(M.fill), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 4 });
+      page.drawSvgPath(path, { x: ox + 3.5 * k, y: Y(oy + 3 * k), scale: k, color: PDFLib.rgb(0, 0, 0), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 2.6 * k });
+      page.drawSvgPath(path, { x: ox, y: Y(oy), scale: k, color: hex(M.fill), borderColor: PDFLib.rgb(0, 0, 0), borderWidth: 2.6 * k });
       if (kind === 'warn') { page.drawRectangle({ x: ox + 46 * k, y: Y(oy + 68 * k), width: 8 * k, height: 30 * k, color: PDFLib.rgb(0, 0, 0) }); page.drawRectangle({ x: ox + 46.5 * k, y: Y(oy + 82 * k), width: 7 * k, height: 8 * k, color: PDFLib.rgb(0, 0, 0) }); }
-      page.drawRectangle({ x: w.x, y: Y(w.y + w.h), width: w.w, height: w.h, borderColor: PDFLib.rgb(0.33, 0.33, 0.33), borderWidth: 0.6, borderDashArray: [1, 2] });
       page.pushOperators(PDFLib.popGraphicsState());
     }
     return await pdf.save({ useObjectStreams: true });

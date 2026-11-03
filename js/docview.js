@@ -5,6 +5,7 @@ import { Annots } from './annots.js';
 import { renderToCanvas } from './pdfio.js';
 import { BASELINE } from './bake.js';
 import { fontPicker } from './fontpicker.js';
+import { rasterizeToPdf } from './doc.js';
 
 const TOOLS = [
   { id: 'undo', icon: 'undo', label: 'Undo', key: 'Ctrl+Z', action: dv => dv.doc.undo(), state: dv => !dv.doc.canUndo },
@@ -387,7 +388,8 @@ export class DocView {
   /** Prints the document exactly as it would be saved (edits, signatures and stamps included). */
   async print() {
     const bytes = await withProgress('Preparing to print', async p => {
-      const out = await this.doc.bake({ onProgress: (f, t) => p.update(f, t) });
+      // a password-protected or unreadable file (e-Aadhaar, e-PAN, …) can't be re-written, so the printout is made from its pages as pictures
+      const out = this.doc.editable ? await this.doc.bake({ onProgress: (f, t) => p.update(f, t) }) : await rasterizeToPdf(this.doc.pdf, { scale: 3, quality: 0.9, withText: false, onProgress: (f, t) => p.update(f, t) });
       return out && this.sigApi ? (await import('./signatures.js')).stampForPrint(this, out) : out; // the printout shows the signature's validation result like the screen does
     });
     if (!bytes) return;
