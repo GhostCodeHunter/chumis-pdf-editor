@@ -298,3 +298,8 @@ html, body { height: 100%; overflow: hidden; }
 .cv-body { min-height: 170px; } .cv-body dd { white-space: pre-line; word-break: break-word; }
 .cv-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .sg-sub { margin: var(--s-4) 0 var(--s-2); font-size: var(--fs-md); font-weight: 600; }
+
+.off-ctl { display: inline-flex; align-items: center; gap: var(--s-2); } .off-badge { display: inline-flex; align-items: center; gap: 4px; }
+.off-list { list-style: none; margin: var(--s-3) 0; padding: 0; display: grid; gap: var(--s-3); }
+.off-row { display: grid; grid-template-columns: 1fr auto; gap: 4px var(--s-3); align-items: center; padding: var(--s-3); border: 1px solid var(--c-border); border-radius: var(--r-md); }
+.off-bar { grid-column: 1 / -1; height: 3px; background: var(--c-border); border-radius: 2px; overflow: hidden; } .off-bar i { display: block; height: 100%; width: 0; background: var(--c-brand); transition: width var(--dur-2) var(--ease-out); }

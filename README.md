@@ -151,3 +151,7 @@ Password-protected signed files (e-Aadhaar, e-PAN) are checked on their original
 - **Revocation** is checked like Acrobat does it offline: from the CRL / OCSP data the signer stored in the signature or the PDF's `/DSS` (long-term validation). A certificate revoked before the signing time makes the signature invalid. Validation information added to a file after signing (LTV) is not counted as a change.
 - **Live CRL checking** needs a small proxy because browsers cannot reach CA servers: deploy `tools/revocation-proxy/worker.js` and set `REVOCATION_PROXY_URL` in `js/config.js`. Users then get a "Check revocation online" switch (off by default).
 - **Certified documents (DocMDP)** are detected with their permission level. A certifying signer must be trusted for certifying: the built-in CCA roots are; certificates you add are only if you tick "Certified documents" in "Add to Trusted Identities". Changes after certification are reported, not analysed.
+
+## Offline
+
+Once the app has loaded it works without a network: editing, merging, organizing, converting, signing, printing and **signature validation** (India's CCA roots are built in; revocation uses the data stored in the file, or the last CRL fetched through the optional proxy). Two optional parts come from a CDN and are kept for offline use by **Offline → Download for offline use**: the OCR engine with English + Hindi data (~15 MB) and the fonts used to match edited PDFs. `tests/smoke17.py` loads the app, switches the network off, reloads, validates a real CCA-issued document, and saves.

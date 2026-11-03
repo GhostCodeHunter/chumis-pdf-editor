@@ -138,6 +138,7 @@ function boot() {
   $('#btn-download').replaceChildren(icon('download', 18), h('span', 'Download PDF'));
   $('#btn-download').addEventListener('click', () => app.views.get(app.active)?.dv?.download());
   $('#top-install').append(installButton({ label: 'Install', kind: 'ghost' }));
+  import('./offline.js').then(m => $('#top-offline').append(m.offlineControl())).catch(e => console.warn('offline controls', e));
   $('#brand-name').textContent = APP_NAME;
   app.renderTabs(); app.activate('home');
 

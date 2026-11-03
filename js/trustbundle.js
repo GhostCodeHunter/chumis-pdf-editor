@@ -27,12 +27,18 @@ export const onlineRevocationAvailable = () => !!REVOCATION_PROXY_URL;
 export const onlineRevocationOn = () => !!REVOCATION_PROXY_URL && localStorage.getItem(ONLINE_KEY) === '1';
 export function setOnlineRevocation(on) { try { localStorage.setItem(ONLINE_KEY, on ? '1' : '0'); } catch {} }
 const crlCache = new Map();
+async function fetchCrl(u) {
+  let cache = null; try { cache = await caches.open('chumi-crl-v1'); } catch {}
+  try {
+    const r = await fetch(`${REVOCATION_PROXY_URL}?url=${encodeURIComponent(u)}`); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const b = new Uint8Array(await r.arrayBuffer()); const der = b[0] === 0x2d ? Uint8Array.from(atob(new TextDecoder().decode(b).replace(/-----[^-]+-----|\s/g, '')), c => c.charCodeAt(0)) : b;
+    try { cache && await cache.put(u, new Response(der)); } catch {}                      // kept for offline use, like Acrobat's revocation cache
+    return der;
+  } catch (e) { const hit = cache && await cache.match(u); if (hit) return new Uint8Array(await hit.arrayBuffer()); throw e; }  // offline: the last CRL fetched (used only while it is still valid)
+}
 async function liveCrls(cert) {
   const out = [];
-  for (const u of cert.crlUrls.slice(0, 2)) {
-    if (!crlCache.has(u)) crlCache.set(u, (async () => { const r = await fetch(`${REVOCATION_PROXY_URL}?url=${encodeURIComponent(u)}`); if (!r.ok) throw new Error('HTTP ' + r.status); const b = new Uint8Array(await r.arrayBuffer()); if (b[0] === 0x2d) { const t = new TextDecoder().decode(b).replace(/-----[^-]+-----|\s/g, ''); return Uint8Array.from(atob(t), c => c.charCodeAt(0)); } return b; })());
-    out.push(await crlCache.get(u));
-  }
+  for (const u of cert.crlUrls.slice(0, 2)) { if (!crlCache.has(u)) crlCache.set(u, fetchCrl(u)); try { out.push(await crlCache.get(u)); } catch (e) { crlCache.delete(u); throw e; } }
   return out;
 }
 /** Revocation information stored in the PDF itself (its /DSS dictionary: CRLs and OCSP responses). */

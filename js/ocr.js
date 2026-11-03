@@ -16,11 +16,21 @@ export function loadTesseract() {
     tesseractPromise = new Promise((res, rej) => {
       const s = document.createElement('script'); s.src = TESSERACT_SRC; s.crossOrigin = 'anonymous';
       s.onload = () => (window.Tesseract ? res(window.Tesseract) : rej(new Error('OCR engine did not start')));
-      s.onerror = () => { tesseractPromise = null; rej(new Error('Could not download the OCR engine. OCR needs an internet connection the first time you use it.')); };
+      s.onerror = () => { tesseractPromise = null; rej(new Error(navigator.onLine ? 'Could not download the OCR engine. Check your internet connection and try again.' : 'You are offline. OCR needs a one-time download: while online, open Offline → “Download for offline use”.')); };
       document.head.append(s);
     });
   }
   return tesseractPromise;
+}
+
+/** Downloads everything OCR needs (engine, core, language data) by running a tiny recognition once — all of it is then kept for offline use. */
+export async function prepareOcr(langs = ['eng', 'hin'], onProgress) {
+  const T = await loadTesseract();
+  const worker = await T.createWorker(langs.join('+'), 1, { logger: m => { if (onProgress && m && typeof m.progress === 'number') onProgress(m.progress, labelFor(m.status)); } });
+  try {
+    const c = document.createElement('canvas'); c.width = 240; c.height = 70; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 240, 70); x.fillStyle = '#000'; x.font = '34px Arial'; x.fillText('Chumi 2026', 10, 48);
+    await worker.recognize(c);
+  } finally { await worker.terminate().catch(() => {}); }
 }
 
 /** Collect words/lines from a Tesseract result (works for v5 flat arrays and nested blocks). */
