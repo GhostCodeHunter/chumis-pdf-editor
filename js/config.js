@@ -4,7 +4,7 @@ export const APP_SHORT = 'Chumi PDF';
 export const COPYRIGHT_HOLDER = 'Chumi';
 export const COPYRIGHT_YEAR = 2026;
 // Set to your GitHub repository URL after you publish (shown in the footer and legal pages). Leave empty to hide.
-export const REPO_URL = '';
+export const REPO_URL = 'https://github.com/rkarthikraj198-stack/chumis-pdf-editor';
 export const APP_TAGLINE = 'Edit, OCR, merge, convert and verify PDFs — privately, in your browser.';
 
 // OCR engine (Tesseract.js) is fetched on first use. Pin a version; point to your own copy to work fully offline.
