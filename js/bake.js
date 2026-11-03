@@ -216,8 +216,10 @@ async function drawTextAnnot(pdf, page, fonts, doc, a, Y, imgCache) {
   const isEdit = a.type === 'textedit';
   const custom = isCustom(a.font);
   // background / cover
-  if (isEdit) page.drawRectangle({ x: a.x - 1, y: Y(a.y + a.h), width: a.coverW + 2, height: a.h, color: rgbHex(a.bg || '#ffffff') });
-  else if (a.bg) page.drawRectangle({ x: a.x, y: Y(a.y + a.h), width: a.w, height: a.h, color: rgbHex(a.bg) });
+  if (isEdit) {
+    page.drawRectangle({ x: a.x - 1, y: Y(a.y + a.h), width: a.coverW + 2, height: a.h, color: rgbHex(a.bg || '#ffffff') });
+    for (const k of a.keep || []) page.drawRectangle({ x: k.x, y: Y(k.y + k.h), width: k.w, height: k.h, color: rgbHex(k.c) }); // borders that ran through the covered box
+  } else if (a.bg) page.drawRectangle({ x: a.x, y: Y(a.y + a.h), width: a.w, height: a.h, color: rgbHex(a.bg) });
   if (!text.trim()) return;
   const maxW = isEdit ? null : a.w;
   const lh = size * LINE_HEIGHT;

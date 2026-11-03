@@ -70,6 +70,11 @@ export async function getPageText(pdf, i) {
     items.push({ str: it.str, x: tx[4], baseline: tx[5], w, fs, angle, fontName: it.fontName, family: st.fontFamily || 'sans-serif', hasEOL: it.hasEOL });
   }
   const segments = buildSegments(items);
+  for (const sg of segments) { // a run never reaches over the next piece of text on its line (e.g. the next table column)
+    const own = new Set(sg.items); let lim = sg.w;
+    for (const it of items) { if (own.has(it) || !it.str.trim() || Math.abs(it.baseline - sg.baseline) > sg.fs * 0.45) continue; const dx = it.x - sg.x; if (dx > 1 && dx < lim) lim = dx - 1; }
+    sg.w = Math.max(Math.min(sg.w, lim), Math.min(sg.w, sg.fs * 0.5));
+  }
   const res = { items, segments, width: vp.width, height: vp.height, text: items.map(x => x.str).join(' ') };
   perDoc.set(i, res);
   return res;
@@ -82,18 +87,23 @@ function buildSegments(items) {
   const flush = () => { if (cur) { finishSeg(cur); segs.push(cur); cur = null; } };
   for (const it of items) {
     if (Math.abs(it.angle) > 0.05) { flush(); continue; } // only horizontal text is editable
-    if (!it.str.trim() && !cur) continue;
+    if (!it.str.trim()) {
+      // pdf.js inserts blank items that span the empty space between pieces of text on a line (e.g. between table columns).
+      // A narrow one is an ordinary word space; a wide one is a column gap and must end the current run, not extend it.
+      if (!cur) continue;
+      if (it.w > cur.fs * 0.7) { flush(); continue; }
+    }
     if (cur) {
       const sameLine = Math.abs(it.baseline - cur.baseline) < Math.max(1.5, cur.fs * 0.3) && Math.abs(it.fs - cur.fs) < cur.fs * 0.35;
       const gap = it.x - cur.right;
       if (sameLine && gap > -cur.fs * 0.6 && gap < cur.fs * 1.1) {
         const needSpace = gap > cur.fs * 0.12 && !/\s$/.test(cur.text) && !/^\s/.test(it.str);
-        cur.text += (needSpace ? ' ' : '') + it.str; cur.right = Math.max(cur.right, it.x + it.w); cur.items.push(it);
+        cur.text += (needSpace ? ' ' : '') + it.str; cur.right = Math.max(cur.right, it.x + it.w); cur.items.push(it); cur.pre.push(needSpace ? ' ' : '');
         continue;
       }
       flush();
     }
-    cur = { text: it.str, x: it.x, baseline: it.baseline, fs: it.fs, right: it.x + it.w, items: [it], fontName: it.fontName, family: it.family };
+    cur = { text: it.str, x: it.x, baseline: it.baseline, fs: it.fs, right: it.x + it.w, items: [it], pre: [''], fontName: it.fontName, family: it.family };
   }
   flush();
   return segs.filter(s => s.text.trim());
@@ -101,6 +111,13 @@ function buildSegments(items) {
 function finishSeg(s) {
   s.w = s.right - s.x; s.text = s.text.replace(/\s+$/, '');
   s.top = s.baseline - s.fs * 0.95; s.h = s.fs * 1.22;
+}
+/** A run rebuilt from a subset of items (used when a run is split, e.g. at a table border). */
+export function makeSeg(items, pre) {
+  const first = items.find(i => i.str.trim()) || items[0], last = items[items.length - 1];
+  const from = items.indexOf(first);
+  const seg = { text: items.slice(from).map((it, k) => (k ? pre[from + k] || '' : '') + it.str).join(''), x: first.x, baseline: first.baseline, fs: first.fs, right: last.x + last.w, items: items.slice(from), pre: ['', ...pre.slice(from + 1)], fontName: first.fontName, family: first.family };
+  finishSeg(seg); return seg;
 }
 
 export async function getFontInfo(pdf, i, fontName) {

@@ -1,6 +1,7 @@
 // Continuous-scroll page viewer: canvas + text layer + overlay layers (search, edit-text boxes, annotations).
 import { pdfjsLib, getPageText } from './pdfio.js';
 import { h, clamp } from './ui.js';
+import { fitSegment, splitAtRules } from './segfit.js';
 
 const MAX_CANVAS_PX = 16e6;
 
@@ -125,7 +126,7 @@ export class Viewer extends EventTarget {
     try { await task.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') console.warn('render', i, e); return; }
     if (token !== p.token) return;
     p.canvas.width = off.width; p.canvas.height = off.height;
-    p.canvas.getContext('2d').drawImage(off, 0, 0);
+    p.canvas.getContext('2d', { willReadFrequently: true }).drawImage(off, 0, 0);
     p.zoomRendered = z; p.rev = this.doc.rev;
     await this.renderTextLayer(i, page);
     if (this.hitMode) this.buildHitLayer(i);
@@ -166,14 +167,19 @@ export class Viewer extends EventTarget {
   async segmentsFor(i) {
     const ocr = this.doc.pages[i]?.ocr;
     if (ocr?.lines?.length) return ocr.lines.map(l => ({ text: l.text, x: l.x, top: l.y, w: l.w, h: l.h, fs: l.h * 0.85, baseline: l.y + l.h * 0.8, family: 'sans-serif', fontName: null, ocr: true }));
-    return (await getPageText(this.doc.pdf, i)).segments;
+    const raw = (await getPageText(this.doc.pdf, i)).segments, p = this.pages[i];
+    if (p?.splitFor?.raw === raw && p.splitFor.z === p.zoomRendered) return p.splitFor.segs; // reuse until the page is re-rendered
+    const segs = p?.canvas?.width ? splitAtRules(p, raw) : raw;
+    if (p) p.splitFor = { raw, z: p.zoomRendered, segs };
+    return segs;
   }
   async buildHitLayer(i) {
     const p = this.pages[i]; p.hitEl.replaceChildren();
     const segs = await this.segmentsFor(i);
     if (!this.hitMode) return;
     segs.forEach(s => {
-      const b = h('div.hit', { style: { left: s.x - 2 + 'px', top: s.top + 'px', width: s.w + 4 + 'px', height: s.h + 'px' }, title: 'Click to edit this text' });
+      const w = s.ocr ? s.w : fitSegment(p, s).w;
+      const b = h('div.hit', { style: { left: s.x - 2 + 'px', top: s.top + 'px', width: w + 4 + 'px', height: s.h + 'px' }, title: 'Click to edit this text' });
       b.addEventListener('click', e => { e.stopPropagation(); this.dispatchEvent(new CustomEvent('edit-segment', { detail: { page: i, seg: s } })); });
       p.hitEl.append(b);
     });

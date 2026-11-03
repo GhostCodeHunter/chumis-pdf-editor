@@ -36,6 +36,10 @@ function timeOf(n) {
 const ATTR = { '2.5.4.3': 'CN', '2.5.4.10': 'O', '2.5.4.11': 'OU', '2.5.4.6': 'C', '2.5.4.5': 'serialNumber', '2.5.4.7': 'L', '2.5.4.8': 'ST', '2.5.4.4': 'SN', '2.5.4.42': 'GN', '1.2.840.113549.1.9.1': 'email', '2.5.4.65': 'pseudonym' };
 function nameOf(n) { const o = {}; for (const rdn of n.children) for (const atv of rdn.children) { const k = ATTR[oidOf(atv.children[0])]; if (k && !o[k]) o[k] = strOf(atv.children[1]); } return o; }
 const HASHES = { '1.3.14.3.2.26': 'SHA-1', '2.16.840.1.101.3.4.2.1': 'SHA-256', '2.16.840.1.101.3.4.2.2': 'SHA-384', '2.16.840.1.101.3.4.2.3': 'SHA-512' };
+// A name reduced to a comparable form, so the same name matches even when two tools encode it with different string types.
+const canonName = n => n.children.map(rdn => rdn.children.map(atv => oidOf(atv.children[0]) + '=' + strOf(atv.children[1]).trim().replace(/\s+/g, ' ').toLowerCase()).sort().join('+')).join(',');
+const stripZ = b => { let i = 0; while (i < b.length - 1 && b[i] === 0) i++; return b.subarray(i); };
+const octetsOf = n => { if (!n) return null; if (!n.constructed) return valOf(n); const parts = n.children.map(octetsOf); const out = new Uint8Array(parts.reduce((a, q) => a + q.length, 0)); let o = 0; for (const q of parts) { out.set(q, o); o += q.length; } return out; };
 const hex = b => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 
 export function parseCert(n) {
@@ -45,7 +49,16 @@ export function parseCert(n) {
   const keyAlg = oidOf(spki.children[0].children[0]); let keyBits = 0;
   try { if (keyAlg === '1.2.840.113549.1.1.1') { const inner = parse(valOf(spki.children[1]).subarray(1), 0); const mod = valOf(inner.children[0]); keyBits = (mod.length - (mod[0] === 0 ? 1 : 0)) * 8; } } catch {}
   const sigBits = valOf(n.children[2]);
-  return { der: rawOf(n), tbsRaw: rawOf(tbs), sigValue: sigBits.subarray(1), serial: hex(serial), serialBytes: serial, issuerRaw: rawOf(issuer), subjectRaw: rawOf(subject), issuer: nameOf(issuer), subject: nameOf(subject), notBefore: timeOf(val.children[0]), notAfter: timeOf(val.children[1]), spki: rawOf(spki), sigAlg, keyAlg, keyBits, selfSigned: eq(rawOf(issuer), rawOf(subject)) };
+  let ski = null, isCA = false;
+  try {
+    const ext = tbs.children.find(c => c.tag === 0xa3);
+    if (ext) for (const e of ext.children[0].children) {
+      const id = oidOf(e.children[0]); const inner = parse(valOf(e.children[e.children.length - 1]), 0);
+      if (id === '2.5.29.14') ski = valOf(inner);
+      if (id === '2.5.29.19') isCA = !!inner.children[0] && inner.children[0].tag === 0x01 && valOf(inner.children[0])[0] !== 0;
+    }
+  } catch {}
+  return { ski, isCA, issuerKey: canonName(issuer), subjectKey: canonName(subject), der: rawOf(n), tbsRaw: rawOf(tbs), sigValue: sigBits.subarray(1), serial: hex(serial), serialBytes: serial, issuerRaw: rawOf(issuer), subjectRaw: rawOf(subject), issuer: nameOf(issuer), subject: nameOf(subject), notBefore: timeOf(val.children[0]), notAfter: timeOf(val.children[1]), spki: rawOf(spki), sigAlg, keyAlg, keyBits, selfSigned: eq(rawOf(issuer), rawOf(subject)) };
 }
 
 /** Parses a certificate file (DER or PEM). */
@@ -115,6 +128,35 @@ export async function inspectSignatures(bytes, { trusted = [] } = {}) {
   return out;
 }
 
+/** RSASSA-PSS parameters (hash and salt length) from a signature AlgorithmIdentifier. */
+function pssParams(algNode) {
+  let hash = 'SHA-1', salt = 20;
+  const prm = algNode.children[1];
+  if (prm && prm.children) for (const c of prm.children) {
+    if (c.tag === 0xa0 && c.children[0]) hash = HASHES[oidOf(c.children[0].children[0])] || hash;
+    if (c.tag === 0xa2 && c.children[0]) { salt = 0; for (const x of valOf(c.children[0])) salt = salt * 256 + x; }
+  }
+  return { hash, salt };
+}
+
+/** The certificates that could belong to the signer, most likely first: the one the signature names, then end-entity certificates, then the rest. */
+function signerCandidates(sid, certs) {
+  let matched = [];
+  if (sid.tag === 0x30) { const ser = stripZ(valOf(sid.children[1])); const iss = rawOf(sid.children[0]); const ik = canonName(sid.children[0]); matched = certs.filter(c => eq(stripZ(c.serialBytes), ser) && (eq(c.issuerRaw, iss) || c.issuerKey === ik)); }
+  else if (sid.tag === 0x80) { const ski = valOf(sid); matched = certs.filter(c => c.ski && eq(c.ski, ski)); }
+  const leafLike = certs.filter(c => !matched.includes(c) && !certs.some(o => o !== c && eq(o.issuerRaw, c.subjectRaw)));
+  return [...matched, ...leafLike, ...certs.filter(c => !matched.includes(c) && !leafLike.includes(c))];
+}
+
+async function verifyWith(cert, scheme, signature, data) {
+  if (cert.keyAlg !== '1.2.840.113549.1.1.1' && cert.keyAlg !== '1.2.840.113549.1.1.10') return false;
+  try {
+    if (scheme.pss) { const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'RSA-PSS', hash: scheme.hash }, false, ['verify']); return await crypto.subtle.verify({ name: 'RSA-PSS', saltLength: scheme.salt }, key, signature, data); }
+    const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'RSASSA-PKCS1-v1_5', hash: scheme.hash }, false, ['verify']);
+    return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
+  } catch { return false; }
+}
+
 async function verifyCms(der, bytes, [b0, b1, b2, b3], r) {
   const root = parse(der, 0);
   const ci = root.children; if (oidOf(ci[0]) !== '1.2.840.113549.1.7.2') throw new Error('Not a CMS SignedData signature');
@@ -122,39 +164,47 @@ async function verifyCms(der, bytes, [b0, b1, b2, b3], r) {
   let k = 3; const certs = []; let signerInfos = null;
   for (; k < sd.length; k++) { const n = sd[k]; if (n.tag === 0xa0) n.children.forEach(c => { try { certs.push(parseCert(c)); } catch {} }); else if (n.tag === 0x31) signerInfos = n; }
   if (!signerInfos || !signerInfos.children.length) throw new Error('No signer found');
+  // Content carried inside the signature itself (the old adbe.pkcs7.sha1 style stores the document's digest here).
+  let eContent = null; try { const ec = sd[2].children[1]; if (ec && ec.children && ec.children[0]) eContent = octetsOf(ec.children[0]); } catch {}
   const si = signerInfos.children[0].children; let p = 1; const sid = si[p++];
   const digestOid = oidOf(si[p++].children[0]); let attrs = null; if (si[p].tag === 0xa0) attrs = si[p++];
-  const sigAlgOid = oidOf(si[p++].children[0]); const signature = valOf(si[p++]);
-  r.algorithm = `${HASHES[digestOid] || digestOid} with ${sigAlgOid.startsWith('1.2.840.113549.1.1') ? 'RSA' : sigAlgOid}`;
-  // signer certificate
-  let cert = null;
-  if (sid.tag === 0x30) { const ser = valOf(sid.children[1]); const iss = rawOf(sid.children[0]); cert = certs.find(c => eq(c.serialBytes, ser) && eq(c.issuerRaw, iss)); }
-  cert = cert || certs[0];
-  r.certs = certs; r.signerCert = cert;
-  if (cert) r.signer = { subject: cert.subject, issuer: cert.issuer, notBefore: cert.notBefore, notAfter: cert.notAfter, serial: cert.serial, selfSigned: cert.selfSigned, chainLength: certs.length };
-  else r.problems.push('The signer certificate is not embedded in the file.');
+  const sigAlgNode = si[p++]; const sigAlgOid = sigAlgNode.children[0] ? oidOf(sigAlgNode.children[0]) : ''; const signature = valOf(si[p++]);
+  const pss = sigAlgOid === '1.2.840.113549.1.1.10';
+  const hashName = pss ? pssParams(sigAlgNode).hash : HASHES[digestOid];
+  r.algorithm = `${HASHES[digestOid] || digestOid} with ${sigAlgOid.startsWith('1.2.840.113549.1.1') ? (pss ? 'RSA-PSS' : 'RSA') : sigAlgOid}`;
+  r.format = r.info.filter || ''; r.certs = certs;
   // signing time
   if (attrs) for (const a of attrs.children) if (oidOf(a.children[0]) === '1.2.840.113549.1.9.5') r.signTime = timeOf(a.children[1].children[0]);
   r.signTime = r.signTime || r.info.when || null;
   // digest of the signed bytes
-  const hashName = HASHES[digestOid]; if (!hashName) { r.problems.push('Unsupported hash algorithm.'); return; }
+  const digestName = HASHES[digestOid]; if (!digestName || !hashName) { r.problems.push('Unsupported hash algorithm.'); r.signerCert = signerCandidates(sid, certs)[0] || null; return; }
   const content = new Uint8Array(b1 + b3); content.set(bytes.subarray(b0, b0 + b1), 0); content.set(bytes.subarray(b2, b2 + b3), b1);
-  const digest = new Uint8Array(await crypto.subtle.digest(hashName, content));
-  let signedData = content;
+  let target = content; // what the signature's own digest is computed over
+  if (eContent) {
+    let same = eq(eContent, content); // the whole signed content embedded in the signature
+    if (!same) for (const h of ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512']) { const d = new Uint8Array(await crypto.subtle.digest(h, content)); if (eq(d, eContent)) { same = true; break; } }
+    r.contentDigestOk = same; target = eContent;
+  }
+  const digest = new Uint8Array(await crypto.subtle.digest(digestName, target));
+  let signedData = target;
   if (attrs) {
     let md = null; for (const a of attrs.children) if (oidOf(a.children[0]) === '1.2.840.113549.1.9.4') md = valOf(a.children[1].children[0]);
-    r.digestOk = !!md && eq(md, digest);
-    if (!r.digestOk) r.problems.push('The document content no longer matches the signed fingerprint — it was changed after signing.');
+    r.digestOk = !!md && eq(md, digest) && r.contentDigestOk !== false;
     signedData = new Uint8Array(rawOf(attrs)); signedData[0] = 0x31;
-  } else r.digestOk = null;
-  // signature value
-  if (!cert) return;
-  if (!sigAlgOid.startsWith('1.2.840.113549.1.1') || sigAlgOid === '1.2.840.113549.1.1.10') { r.problems.push('This signature uses an algorithm this checker does not support (only RSA PKCS#1 v1.5).'); return; }
-  try {
-    const key = await crypto.subtle.importKey('spki', cert.spki, { name: 'RSASSA-PKCS1-v1_5', hash: hashName }, false, ['verify']);
-    r.sigOk = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signedData);
-    if (!r.sigOk) r.problems.push('The cryptographic signature does not match — the signature or the document has been altered.');
-  } catch (e) { r.problems.push('Signature check failed: ' + (e.message || e)); }
+  } else r.digestOk = eContent ? r.contentDigestOk : null;
+  if (r.digestOk === false) r.problems.push('The document content no longer matches the signed fingerprint — it was changed after signing.');
+  // signer certificate and signature value: try the certificate the signature names first, then any other embedded one
+  const cands = signerCandidates(sid, certs);
+  if (!cands.length) { r.problems.push('The signer certificate is not embedded in the file.'); return; }
+  if (!sigAlgOid.startsWith('1.2.840.113549.1.1')) { r.signerCert = cands[0]; r.problems.push('This signature uses an algorithm this checker does not support (only RSA).'); }
+  else {
+    const scheme = pss ? { pss: true, hash: hashName, salt: pssParams(sigAlgNode).salt } : { hash: hashName };
+    let found = null; for (const c of cands) if (await verifyWith(c, scheme, signature, signedData)) { found = c; break; }
+    r.sigOk = !!found; r.signerCert = found || cands[0];
+    if (!found) r.problems.push('The cryptographic signature does not match — the signature or the document has been altered.');
+  }
+  const cert = r.signerCert;
+  r.signer = { subject: cert.subject, issuer: cert.issuer, notBefore: cert.notBefore, notAfter: cert.notAfter, serial: cert.serial, selfSigned: cert.selfSigned, chainLength: certs.length };
   if (r.signTime && cert.notBefore && cert.notAfter && (r.signTime < cert.notBefore || r.signTime > cert.notAfter)) r.problems.push('The signing time is outside the certificate’s validity period.');
 }
 

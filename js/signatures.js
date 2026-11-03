@@ -33,7 +33,8 @@ const statusOf = s => (s.empty ? { cls: 'info', ic: 'help', short: 'Unsigned sig
 /** Plain-language findings, worded like Acrobat's "Signature Validation Status". */
 export function findings(s) {
   const L = [];
-  if (s.digestOk === false || s.sigOk === false) L.push(['bad', 'The document has been altered or corrupted since the signature was applied.']);
+  if (s.digestOk === false) L.push(['bad', 'The document has been altered or corrupted since the signature was applied.']);
+  else if (s.sigOk === false) L.push(['bad', 'The document content matches what was signed, but the signature itself does not verify against the signer’s certificate, so it cannot be relied on.']);
   else if (s.sigOk === true && s.modifiedAfter) L.push(['warn', 'The signature itself is intact, but the file was changed after it was applied (later edits or another signature). Use “Compare Signed Version to Current Version” to see what changed.']);
   else if (s.sigOk === true) L.push(['ok', 'The document has not been modified since this signature was applied.']);
   else L.push(['warn', 'The signature value could not be checked.']);
@@ -65,7 +66,7 @@ export function validationDialog(dv, s) {
 export function propertiesDialog(dv, s) {
   const st = statusOf(s);
   const rows = [['Status', st.short], ['Signed by', describeSigner(s.signer) || '—'], ['Date', fmt(s.signTime)], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—'],
-    ['Method', s.algorithm || '—'], ['Signed part of file', s.signedLength ? `${s.signedLength.toLocaleString()} of ${s.fileLength.toLocaleString()} bytes` : '—'], ['Document changed since', s.modifiedAfter ? 'Yes' : s.sigOk ? 'No' : '—']];
+    ['Method', s.algorithm || '—'], ['Format', s.format || '—'], ['Document fingerprint', s.digestOk === true ? 'Matches the signed fingerprint' : s.digestOk === false ? 'Does not match' : s.sigOk ? 'Covered by the signature value' : '—'], ['Signature value', s.sigOk === true ? 'Verified with the signer’s certificate' : s.sigOk === false ? 'Does not verify' : '—'], ['Signed part of file', s.signedLength ? `${s.signedLength.toLocaleString()} of ${s.fileLength.toLocaleString()} bytes` : '—'], ['Document changed since', s.modifiedAfter ? 'Yes' : s.sigOk ? 'No' : '—']];
   const d = dialog({
     title: 'Signature Properties', width: 560,
     body: h('div', h('div.sg-head.' + st.cls, icon(st.ic, 22), h('strong', st.head(nameOf(s)))), h('dl.vf-dl', rows.map(([k, v]) => [h('dt', k), h('dd', v)])), h('ul.sg-lines', findings(s).filter(x => x[0] !== 'info').map(row))),

@@ -3,6 +3,8 @@ import { h, uid, clamp, toast, pickFiles, readBytes } from './ui.js';
 import { BASELINE, CSS_FONT, LINE_HEIGHT } from './bake.js';
 import { getFontInfo } from './pdfio.js';
 import { isCustom, cssFamilyFor, ensureFont, isLoaded, probeBase } from './fonts.js';
+import { sampleColors, fitSegment, chooseFamily, detectKeep } from './segfit.js';
+export { sampleColors };
 
 export const TOOL_GROUPS = {
   text: 'text', textedit: 'text', rect: 'shape', ellipse: 'shape', line: 'shape', arrow: 'shape', ink: 'pen',
@@ -96,7 +98,12 @@ export class Annots extends EventTarget {
         S.fontFamily = cssFamilyFor(a); S.fontSize = px(a.size); S.lineHeight = LINE_HEIGHT; S.fontKerning = 'none'; S.fontVariantLigatures = 'none'; S.fontSynthesis = isCustom(a.font) ? 'none' : 'weight style';
         S.fontWeight = a.bold ? '700' : '400'; S.fontStyle = a.italic ? 'italic' : 'normal'; S.color = a.color; S.opacity = op;
         if (a.type === 'text') { S.width = px(a.w); S.textAlign = a.align || 'left'; if (a.bg) S.background = a.bg; }
-        else { S.minWidth = px(a.coverW); S.background = a.bg || '#fff'; S.height = px(a.h); S.boxShadow = `0 0 0 1px ${a.bg || '#fff'}`; }
+        else {
+          S.minWidth = px(a.coverW); S.height = px(a.h);
+          const keep = a.keep || [];
+          S.background = [...keep.map(k => `linear-gradient(${k.c},${k.c}) ${k.x - a.x}px ${k.y - a.y}px / ${k.w}px ${k.h}px no-repeat`), a.bg || '#fff'].join(',');
+          S.boxShadow = keep.length ? 'none' : `0 0 0 1px ${a.bg || '#fff'}`;
+        }
         el.textContent = a.text;
         if (isCustom(a.font) && !isLoaded(a)) ensureFont(a).then(r => { if (r) this.fontReady(a); });
         break;
@@ -391,13 +398,15 @@ export class Annots extends EventTarget {
     if (existing) { this.select(existing, pi); return this.beginEdit(existing, pi); }
     const info = this.viewer.pages[pi];
     const fi = seg.fontName ? await getFontInfo(this.doc.pdf, pi, seg.fontName) : {};
-    const fam = fi.mono || /mono|courier|consol/i.test(seg.family + (fi.name || '')) ? 'cour' : (fi.serif || /^serif$/i.test(seg.family) || /times|georgia|garamond|serif|roman|cambria/i.test(fi.name || '') ? 'times' : 'helv');
+    const fit = seg.ocr ? { w: seg.w, bold: false } : fitSegment(info, seg); // the real width of the text, not the width the PDF reports
+    const fam = chooseFamily(seg, fi, fit);
     const size = +seg.fs.toFixed(1);
-    const { bg, fg } = sampleColors(info, seg);
+    const { bg, fg } = sampleColors(info, { ...seg, w: fit.w });
     const a = {
-      id: uid(), type: 'textedit', x: seg.x, y: seg.baseline - (BASELINE[fam]) * size, coverW: seg.w, h: size * LINE_HEIGHT,
-      text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold, italic: !!fi.italic, color: fg, bg,
+      id: uid(), type: 'textedit', x: seg.x, y: seg.baseline - (BASELINE[fam]) * size, coverW: +fit.w.toFixed(2), h: size * LINE_HEIGHT,
+      text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold || !!fit.bold, italic: !!fi.italic, color: fg, bg,
     };
+    if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // table borders / rules inside the covered box stay visible
     this.doc.pages[pi].annots.push(a);
     this.repaint(a, pi); this.select(a, pi); this.beginEdit(a, pi, true, true);
   }
@@ -503,26 +512,6 @@ function mergeLineRects(rs) {
     } else out.push([...r]);
   }
   return out;
-}
-
-/** Most common colour in a text box = background; the pixel farthest from it = ink colour. */
-export function sampleColors(info, seg) {
-  try {
-    const c = info.canvas; if (!c.width) throw 0;
-    const sx = c.width / info.w;
-    const x = Math.max(0, Math.floor((seg.x - 1) * sx)), y = Math.max(0, Math.floor(seg.top * sx));
-    const w = Math.min(c.width - x, Math.ceil((seg.w + 2) * sx)), hh = Math.min(c.height - y, Math.ceil(seg.h * sx));
-    if (w < 2 || hh < 2) throw 0;
-    const d = c.getContext('2d').getImageData(x, y, w, hh).data;
-    const bins = new Map();
-    for (let i = 0; i < d.length; i += 4) { const k = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3); bins.set(k, (bins.get(k) || 0) + 1); }
-    let best = 0, bk = 0; for (const [k, n] of bins) if (n > best) { best = n; bk = k; }
-    const bgc = [((bk >> 10) & 31) << 3, ((bk >> 5) & 31) << 3, (bk & 31) << 3].map(v => Math.min(255, v + 4));
-    let far = 0, fc = [0, 0, 0];
-    for (let i = 0; i < d.length; i += 4) { const dist = Math.abs(d[i] - bgc[0]) + Math.abs(d[i + 1] - bgc[1]) + Math.abs(d[i + 2] - bgc[2]); if (dist > far) { far = dist; fc = [d[i], d[i + 1], d[i + 2]]; } }
-    const hex = v => '#' + v.map(n => n.toString(16).padStart(2, '0')).join('');
-    return { bg: hex(bgc), fg: far > 90 ? hex(fc) : '#000000' };
-  } catch { return { bg: '#ffffff', fg: '#000000' }; }
 }
 
 /** Converts any browser-readable image into PNG/JPEG bytes the PDF writer can embed. */
