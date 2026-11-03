@@ -99,12 +99,16 @@ export class Annots extends EventTarget {
         S.fontWeight = a.bold ? '700' : '400'; S.fontStyle = a.italic ? 'italic' : 'normal'; S.color = a.color; S.opacity = op;
         if (a.type === 'text') { S.width = px(a.w); S.textAlign = a.align || 'left'; if (a.bg) S.background = a.bg; }
         else {
-          S.minWidth = px(a.patch ? Math.max(a.coverW, a.patch.x + a.patch.w - a.x) : a.coverW); S.height = px(a.patch ? Math.max(a.h, a.patch.y + a.patch.h - a.y) : a.h);
           const keep = a.keep || [];
           const pu = a.patch && this.doc.assets.get(a.patch.id)?.url;
-          if (pu) { S.background = `url(${pu}) ${a.patch.x - a.x}px ${a.patch.y - a.y}px / ${a.patch.w}px ${a.patch.h}px no-repeat, ${a.bg || '#fff'}`; S.boxShadow = 'none'; }
-          else S.background = [...keep.map(k => `linear-gradient(${k.c},${k.c}) ${k.x - a.x}px ${k.y - a.y}px / ${k.w}px ${k.h}px no-repeat`), a.bg || '#fff'].join(',');
-          if (!pu) S.boxShadow = keep.length ? 'none' : `0 0 0 1px ${a.bg || '#fff'}`;
+          const cv = a.patch ? { x: Math.min(a.x, a.patch.x), y: Math.min(a.y, a.patch.y), w: Math.max(a.coverW, a.patch.x + a.patch.w - a.x), h: Math.max(a.h, a.patch.y + a.patch.h - a.y) } : { x: a.x - 0.5, y: a.y, w: a.coverW + 1, h: a.h };
+          S.minWidth = px(Math.max(a.coverW, cv.w)); S.height = px(Math.max(a.h, cv.y + cv.h - a.y));
+          const bgc = a.bg || '#fff', at = (x, y, w, hh) => `${x - a.x}px ${y - a.y}px / ${w}px ${hh}px no-repeat`;
+          const layers = [];
+          if (pu) layers.push(`url(${pu}) ${at(a.patch.x, a.patch.y, a.patch.w, a.patch.h)}`);
+          else for (const k of keep) layers.push(`linear-gradient(${k.c},${k.c}) ${at(k.x, k.y, k.w, k.h)}`);
+          layers.push(`linear-gradient(${bgc},${bgc}) ${at(cv.x, cv.y, cv.w, cv.h)}`);   // behind the patch / borders: the plain cover, exactly the size of the old text
+          S.background = layers.join(','); S.boxShadow = 'none';
         }
         el.textContent = a.text;
         if (isCustom(a.font) && !isLoaded(a)) ensureFont(a).then(r => { if (r) this.fontReady(a); });
@@ -408,22 +412,29 @@ export class Annots extends EventTarget {
   /** Click on an existing text line while "Edit text" is active. */
   async editSegment(pi, seg, point) {
     // already edited? reuse
-    const existing = this.doc.pages[pi].annots.find(x => x.type === 'textedit' && Math.abs(x.x - seg.x) < 2 && Math.abs(x.y - (seg.baseline - BASELINE.helv * seg.fs)) < 4);
+    const existing = this.doc.pages[pi].annots.find(x => x.type === 'textedit' && Math.abs(x.x - seg.x) < 2 && (x.base != null ? Math.abs(x.base - seg.baseline) < 2 : Math.abs(x.y - (seg.baseline - BASELINE.helv * seg.fs)) < 4));
     if (existing) { this.select(existing, pi); return this.beginEdit(existing, pi, false, false, point); }
+    const key = `${pi}:${seg.x.toFixed(1)}:${seg.baseline.toFixed(1)}`;   // a second tap while the first is still preparing the line must not start a second edit on top of it
+    if ((this._preparing ||= new Set()).has(key)) return;
+    this._preparing.add(key);
+    try { return await this.prepareSegment(pi, seg, point); } finally { this._preparing.delete(key); }
+  }
+  async prepareSegment(pi, seg, point) {
     const info = this.viewer.pages[pi];
     const fi = seg.fontName ? await getFontInfo(this.doc.pdf, pi, seg.fontName) : {};
     const fit = seg.ocr ? { w: seg.w, bold: false } : fitSegment(info, seg); // the real width of the text, not the width the PDF reports
     const boxes = seg.ocr ? [] : await segmentOps(this.doc.pdf, pi, seg);          // the exact drawing operations of this run of text
-    if (boxes.length) fit.w = Math.max(4, Math.min(seg.w + 3, Math.max(...boxes.map(b => b.x1)) - seg.x));
+    if (boxes.length) fit.w = Math.max(4, Math.min(fit.w + 3, seg.w + 3, Math.max(...boxes.map(b => b.x1)) - seg.x));   // never wider than the text really is
     const fam = chooseFamily(seg, fi, fit);
     const size = +seg.fs.toFixed(1);
     const { bg, fg } = sampleColors(info, { ...seg, w: fit.w });
     const a = {
       id: uid(), type: 'textedit', x: seg.x, y: seg.baseline - (BASELINE[fam]) * size, coverW: +fit.w.toFixed(2), h: size * LINE_HEIGHT,
-      text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold || !!fit.bold, italic: !!fi.italic, color: fg, bg,
+      base: seg.baseline, text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold || !!fit.bold, italic: !!fi.italic, color: fg, bg,
     };
     const match = seg.ocr ? null : matchPdfFont(fi.name); // upgraded to the PDF's own typeface once it has loaded (below)
     // the area under the old text is redrawn from the page itself WITHOUT that text, so watermarks, table rules and tints stay exactly as they were
+    boxes.seg = seg;
     const patch = boxes.length ? await this.makePatch(pi, boxes, a) : null;
     if (patch) a.patch = patch;
     else if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // fallback: plain cover, with the borders inside it redrawn
@@ -434,9 +445,9 @@ export class Annots extends EventTarget {
 
   async makePatch(pi, boxes, a) {
     try {
-      // generous on purpose: the patch is the page itself drawn without this text, so anything else inside it (rules, tints, watermark, neighbours) looks unchanged
-      const x0 = Math.min(a.x - 1, ...boxes.map(b => b.x0)) - 1, x1 = Math.max(a.x + a.coverW + 1, ...boxes.map(b => b.x1)) + 1;
-      const y0 = Math.min(a.y, ...boxes.map(b => b.y0)) - 0.5, y1 = Math.max(a.y + a.h, ...boxes.map(b => b.y1)) + 0.5;
+      // the patch is the page itself drawn without this text, cut to the old text's own box (never over the neighbours, whose own edits must stay on top)
+      const x0 = Math.min(a.x, boxes.seg.x) - 1, x1 = Math.max(a.x + a.coverW, boxes.seg.x + boxes.seg.w) + 1;
+      const y0 = Math.min(a.y, boxes.seg.top) - 0.5, y1 = Math.max(a.y + a.h, boxes.seg.top + boxes.seg.h) + 0.5;
       const rect = { x: +x0.toFixed(2), y: +y0.toFixed(2), w: +(x1 - x0).toFixed(2), h: +(y1 - y0).toFixed(2) };
       const c = await renderPatch(this.doc.pdf, pi, rect, new Set(boxes.map(b => b.i)), 6);
       return { id: this.doc.addAsset(await canvasToBytes(c, 'image/png'), 'image/png'), ...rect };

@@ -89,23 +89,31 @@ const SANS = /arial|helvet|calibri|verdana|tahoma|segoe|roboto|open\s?sans|liber
 const SERIF = /times|georgia|garamond|palatino|book\s?antiqua|bookman|century|cambria|minion|liberation\s?serif|dejavu\s?serif|roman|serif/i;
 const MONO = /mono|courier|consol|lucida\s?console|menlo|fixed/i;
 
-/** Picks the built-in family closest to the original: by font name first, then by how wide the text really is, then by the font's own flags. */
+/**
+ * Picks the built-in family closest to the original: by font name first, then by the class pdf.js read from the font's own flags
+ * (serif / sans-serif / monospace). Text width is only a tie-breaker inside that class, or the evidence when nothing is known:
+ * a sans font must never turn into Times just because the two happen to measure about the same.
+ */
 export function chooseFamily(seg, fi, fit) {
   const name = String(fi?.name || '').replace(/^[A-Z]{6}\+/, '');
   if (name) { if (MONO.test(name)) return 'cour'; if (SANS.test(name)) return 'helv'; if (SERIF.test(name)) return 'times'; }
+  const fam = String(seg.family || '');
+  const cls = fi?.mono || /mono/i.test(fam) ? 'cour' : (fi?.serif || /^serif$/i.test(fam) ? 'times' : (fam || fi?.serif === false ? 'helv' : null));
   try {
     if (fit?.w > 8 && seg.text.length > 3) {
       const cx = (chooseFamily.cx ||= document.createElement('canvas').getContext('2d'));
-      let best = null;
-      for (const [fam, bold] of [['helv', false], ['helv', true], ['times', false], ['times', true], ['cour', false]]) {
-        cx.font = `${bold ? 700 : 400} ${seg.fs}px ${CSS_BUILTIN[fam]}`;
+      const errs = {};
+      for (const [f, bold] of [['helv', false], ['helv', true], ['times', false], ['times', true], ['cour', false]]) {
+        cx.font = `${bold ? 700 : 400} ${seg.fs}px ${CSS_BUILTIN[f]}`;
         const err = Math.abs(cx.measureText(seg.text).width - fit.w) / fit.w;
-        if (!best || err < best.err) best = { fam, err };
+        if (errs[f] === undefined || err < errs[f]) errs[f] = err;
       }
-      if (best.err < 0.07) return best.fam;
+      const best = Object.entries(errs).sort((a, b) => a[1] - b[1])[0];
+      if (!cls) { if (best[1] < 0.07) return best[0]; }
+      else if (best[0] !== cls && best[1] < 0.015 && errs[cls] > 0.06) return best[0]; // the font's flags are plainly wrong: the measured width fits another family almost exactly
     }
   } catch {}
-  return fi?.mono || /mono|courier/i.test(seg.family) ? 'cour' : (fi?.serif || /^serif$/i.test(seg.family) ? 'times' : 'helv');
+  return cls || 'helv';
 }
 
 /**

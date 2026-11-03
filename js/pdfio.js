@@ -84,7 +84,15 @@ export function clearTextCache(pdf) { textCache.delete(pdf); opCache.delete(pdf)
 /* --- the page drawn WITHOUT a given piece of text (keeps watermarks, table rules, tints and images exactly as they are) --- */
 const opCache = new WeakMap();
 /** Bounding box (display points, origin top-left) and operator code of every drawing operation on a page. pdf.js records the boxes coarsely (about 1/256 of the page). */
+const TEXT_FN = new Set();   // filled lazily from pdfjsLib.OPS (the library is a global)
+function opString(args) {
+  const g = args && args[0]; if (!Array.isArray(g)) return '';
+  let t = ''; for (const x of g) if (x && typeof x === 'object' && typeof x.unicode === 'string') t += x.unicode;
+  return t;
+}
+const squash = t => String(t || '').normalize('NFKC').replace(/[\s\u00a0\u200b\u00ad]+/g, '');
 export async function opBoxes(pdf, i) {
+  if (!TEXT_FN.size) { const O = pdfjsLib.OPS; [O.showText, O.showSpacedText, O.nextLineShowText, O.nextLineSetSpacingShowText].forEach(f => TEXT_FN.add(f)); }
   let per = opCache.get(pdf); if (!per) opCache.set(pdf, per = new Map());
   if (per.has(i)) return per.get(i);
   const job = (async () => {
@@ -95,7 +103,7 @@ export async function opBoxes(pdf, i) {
     const ol = await page.getOperatorList(), boxes = [];
     for (let k = 0; k < ol.fnArray.length; k++) {
       const x0 = rb.minX(k) * c.width, x1 = rb.maxX(k) * c.width, y0 = rb.minY(k) * c.height, y1 = rb.maxY(k) * c.height;
-      if (x1 > x0 && y1 > y0) boxes.push({ i: k, fn: ol.fnArray[k], x0, x1, y0, y1 });
+      if (x1 > x0 && y1 > y0) boxes.push({ i: k, fn: ol.fnArray[k], x0, x1, y0, y1, str: TEXT_FN.has(ol.fnArray[k]) ? opString(ol.argsArray[k]) : '' });
     }
     return { fn: ol.fnArray, boxes };
   })().catch(() => ({ fn: [], boxes: [] }));
@@ -105,10 +113,34 @@ export async function textOpBoxes(pdf, i) {
   const O = pdfjsLib.OPS;
   return (await opBoxes(pdf, i)).boxes.filter(b => b.fn === O.showText || b.fn === O.showSpacedText || b.fn === O.nextLineShowText || b.fn === O.nextLineSetSpacingShowText);
 }
-/** The text operations that draw exactly this run of text (and nothing beside it), with their boxes. */
+/**
+ * The text operations that draw exactly this run of text (and nothing beside it), with their boxes.
+ * pdf.js reports each operation's box far wider than the glyphs (up to ~1.5 em each side), so the boxes only decide which operations are
+ * NEAR the run; the operations themselves are picked by what they spell, in drawing order, until they spell this run exactly.
+ * If any operation that is left behind could still draw part of the old text it would show through the edit, so an uncertain match returns nothing
+ * (the caller then covers the old text with a plain patch instead).
+ */
 export async function segmentOps(pdf, i, seg) {
-  const ops = await textOpBoxes(pdf, i), w = seg.w;
-  return ops.filter(o => { const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2; return cx >= seg.x - 1 && cx <= seg.x + w + 1 && cy >= seg.top && cy <= seg.top + seg.h && o.x0 >= seg.x - 5 && o.x1 <= seg.x + w + 5; });
+  const ops = await textOpBoxes(pdf, i), w = seg.w, fs = seg.fs, want = squash(seg.text);
+  const near = ops.filter(o => { const cy = (o.y0 + o.y1) / 2, cx = (o.x0 + o.x1) / 2; return cy >= seg.top - fs * 0.35 && cy <= seg.top + seg.h + fs * 0.35 && cx >= seg.x - fs * 2 && cx <= seg.x + w + fs * 2; }).sort((a, b) => a.i - b.i);
+  const decoded = near.filter(o => squash(o.str));
+  if (want && decoded.length) {
+    const picked = new Set();
+    for (let a = 0; a < decoded.length; a++) {
+      let acc = '';
+      for (let b = a; b < decoded.length; b++) {
+        acc += squash(decoded[b].str);
+        if (acc === want) { for (let k = a; k <= b; k++) picked.add(decoded[k]); break; }
+        if (acc.length >= want.length || !want.startsWith(acc)) break;
+      }
+    }
+    // an operation drawn twice (a fake bold, a shadow) belongs to the run as well: same text, same place
+    const out = [...picked].filter(o => { const cx = (o.x0 + o.x1) / 2; return cx >= seg.x - fs * 1.6 && cx <= seg.x + w + fs * 1.6; });
+    if (out.length) return out;
+    return [];
+  }
+  if (decoded.length) return [];            // the page has text here that we cannot read back: do not guess
+  return ops.filter(o => { const cx = (o.x0 + o.x1) / 2, cy = (o.y0 + o.y1) / 2; return cx >= seg.x - 1 && cx <= seg.x + w + 1 && cy >= seg.top && cy <= seg.top + seg.h && o.x0 >= seg.x - 5 && o.x1 <= seg.x + w + 5; }); // operations with no text to read (Type 3 glyphs…): the old box test
 }
 /** Renders a rectangle of the page (points) at the given scale with some operations left out. */
 export async function renderPatch(pdf, i, rect, skip, scale = 4) {
