@@ -180,7 +180,7 @@ export class Viewer extends EventTarget {
     segs.forEach(s => {
       const w = s.w;
       const b = h('div.hit', { style: { left: s.x - 2 + 'px', top: s.top + 'px', width: w + 4 + 'px', height: s.h + 'px' }, title: 'Click to edit this text' });
-      b.addEventListener('click', e => { e.stopPropagation(); this.dispatchEvent(new CustomEvent('edit-segment', { detail: { page: i, seg: s } })); });
+      b.addEventListener('click', e => { e.stopPropagation(); this.dispatchEvent(new CustomEvent('edit-segment', { detail: { page: i, seg: s, point: { x: e.clientX, y: e.clientY } } })); });
       p.hitEl.append(b);
     });
   }

@@ -145,6 +145,8 @@ html, body { height: 100%; overflow: hidden; }
 .annot.a-text { white-space: pre-wrap; min-height: 1em; } .annot.a-textedit { white-space: pre; }
 .annot.a-text:hover, .annot.a-textedit:hover { outline-color: var(--c-accent); }
 .annot.editing { cursor: text; outline: 1px solid var(--c-accent); user-select: text; caret-color: #000; }
+.annot.a-textedit.editing { outline: 1px dashed var(--c-accent); outline-offset: 2px; }          /* Acrobat-style thin dotted frame while typing */
+.annot.a-textedit { cursor: text; } .annot.a-textedit:hover { outline-color: rgba(20,115,230,.55); outline-offset: 2px; }
 .annot.a-image img { width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; }
 .annot.a-whiteout { outline: 1px dashed rgba(0, 0, 0, .25); } .annot.a-redact { background: rgba(0, 0, 0, .85); outline: 2px dashed #ff6b6b; }
 .annot.a-highlight i, .annot.a-underline i, .annot.a-strike i { position: absolute; display: block; }

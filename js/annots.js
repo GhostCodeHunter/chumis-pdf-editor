@@ -34,7 +34,7 @@ export class Annots extends EventTarget {
     root.addEventListener('pointerdown', e => this.onPointerDown(e));
     root.addEventListener('dblclick', e => this.onDblClick(e));
     root.addEventListener('mouseup', e => this.onMouseUp(e));
-    this.viewer.addEventListener('edit-segment', e => this.editSegment(e.detail.page, e.detail.seg));
+    this.viewer.addEventListener('edit-segment', e => this.editSegment(e.detail.page, e.detail.seg, e.detail.point));
     this.viewer.addEventListener('rendered', e => this.renderPage(e.detail));
     this.viewer.addEventListener('built', () => this.renderAll());
     this.doc.addEventListener('annots', () => { this.sel = null; this.renderAll(); this.emitSel(); });
@@ -206,7 +206,7 @@ export class Annots extends EventTarget {
   }
   paintSelection() {
     this.viewer.pages.forEach(p => p.annotEl.querySelectorAll('.selbox').forEach(e => e.remove()));
-    const s = this.selected; if (!s || this.editing) return;
+    const s = this.selected; if (!s || this.editing || s.a.type === 'textedit') return;
     const { a, page } = s; const [x, y, w, hh] = this.bbox(a); const pad = a.type === 'ink' || a.type === 'line' || a.type === 'arrow' ? 4 : 0;
     const box = h('div.selbox', { style: { left: x - pad + 'px', top: y - pad + 'px', width: w + pad * 2 + 'px', height: hh + pad * 2 + 'px' } });
     const z = 1 / this.zoom;
@@ -237,8 +237,8 @@ export class Annots extends EventTarget {
         if (MARKUP_TOOLS.has(t)) return;
         if (t === 'edittext' && a.type !== 'textedit') return;
         this.select(a, pi);
-        if (a.type !== 'textedit' || t !== 'edittext') { e.preventDefault(); this.startMove(e, pi, a); }
-        else this.beginEdit(a, pi);
+        if (a.type === 'textedit') { e.preventDefault(); this.beginEdit(a, pi, false, false, { x: e.clientX, y: e.clientY }); }   // existing text is edited where it is — never dragged like a text box
+        else { e.preventDefault(); this.startMove(e, pi, a); }
       } else if (!e.target.closest('.hit') && !MARKUP_TOOLS.has(t)) { if (this.sel) this.select(null); this.endEdit(true); }
       return;
     }
@@ -354,7 +354,7 @@ export class Annots extends EventTarget {
   }
 
   /* ------------------------------------------------------------ text editing */
-  beginEdit(a, pi, isNew = false, selectAll = false) {
+  beginEdit(a, pi, isNew = false, selectAll = false, point = null) {
     this.endEdit(true);
     let el = this.findEl(a, pi); if (!el) el = this.repaint(a, pi);
     el.contentEditable = 'true'; el.spellcheck = false; el.classList.add('editing'); el.dataset.isNew = isNew ? '1' : '';
@@ -374,7 +374,19 @@ export class Annots extends EventTarget {
     el.focus();
     const range = document.createRange(); range.selectNodeContents(el);
     const sel = getSelection(); sel.removeAllRanges();
-    if (selectAll || (!isNew && a.text)) sel.addRange(range); else { range.collapse(false); sel.addRange(range); }
+    if (selectAll || (a.type !== 'textedit' && !isNew && a.text)) sel.addRange(range);
+    else { const at = point && this.caretAt(el, pi, point); if (at) sel.addRange(at); else { range.collapse(false); sel.addRange(range); } }
+  }
+  /** The caret position (a collapsed Range inside el) for a click at client coordinates; the hit boxes are lifted out of the way for the lookup. */
+  caretAt(el, pi, { x, y }) {
+    const hit = this.viewer.pages[pi]?.hitEl; const prev = hit ? hit.style.display : ''; if (hit) hit.style.display = 'none';
+    try {
+      let r = null;
+      if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+      else if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); } }
+      if (r && el.contains(r.startContainer)) return r;
+      const b = el.getBoundingClientRect(), end = document.createRange(); end.selectNodeContents(el); end.collapse(x > b.left + b.width / 2 ? false : true); return end; // clicked beside the text: nearest end
+    } finally { if (hit) hit.style.display = prev; }
   }
   endEdit(commit) {
     const ed = this.editing; if (!ed) return;
@@ -394,10 +406,10 @@ export class Annots extends EventTarget {
   }
 
   /** Click on an existing text line while "Edit text" is active. */
-  async editSegment(pi, seg) {
+  async editSegment(pi, seg, point) {
     // already edited? reuse
     const existing = this.doc.pages[pi].annots.find(x => x.type === 'textedit' && Math.abs(x.x - seg.x) < 2 && Math.abs(x.y - (seg.baseline - BASELINE.helv * seg.fs)) < 4);
-    if (existing) { this.select(existing, pi); return this.beginEdit(existing, pi); }
+    if (existing) { this.select(existing, pi); return this.beginEdit(existing, pi, false, false, point); }
     const info = this.viewer.pages[pi];
     const fi = seg.fontName ? await getFontInfo(this.doc.pdf, pi, seg.fontName) : {};
     const fit = seg.ocr ? { w: seg.w, bold: false } : fitSegment(info, seg); // the real width of the text, not the width the PDF reports
@@ -416,7 +428,7 @@ export class Annots extends EventTarget {
     if (patch) a.patch = patch;
     else if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // fallback: plain cover, with the borders inside it redrawn
     this.doc.pages[pi].annots.push(a);
-    this.repaint(a, pi); this.select(a, pi); this.beginEdit(a, pi, true, true);
+    this.repaint(a, pi); this.select(a, pi); this.beginEdit(a, pi, true, false, point);   // like Acrobat / Sejda: the caret goes where you clicked, nothing is selected
     if (match) this.useMatchingFont(a, pi, match, size, seg.baseline);
   }
 
@@ -526,6 +538,7 @@ export class Annots extends EventTarget {
     this.renderPage(s.page); this.doc.checkpoint();
   }
   nudge(dx, dy) {
+    if (this.selected?.a.type === 'textedit') return; // edited text stays where the original was
     const s = this.selected; if (!s || this.editing) return;
     this.applyOffset(s.a, copyJson(s.a), dx, dy); this.repaint(s.a, s.page); this.doc.checkpoint();
   }
