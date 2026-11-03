@@ -3,7 +3,7 @@ import { h, uid, clamp, toast, pickFiles, readBytes } from './ui.js';
 import { BASELINE, CSS_FONT, LINE_HEIGHT } from './bake.js';
 import { getFontInfo } from './pdfio.js';
 import { isCustom, cssFamilyFor, ensureFont, isLoaded, probeBase } from './fonts.js';
-import { sampleColors, fitSegment, chooseFamily, detectKeep } from './segfit.js';
+import { sampleColors, fitSegment, chooseFamily, detectKeep, matchPdfFont } from './segfit.js';
 export { sampleColors };
 
 export const TOOL_GROUPS = {
@@ -406,9 +406,22 @@ export class Annots extends EventTarget {
       id: uid(), type: 'textedit', x: seg.x, y: seg.baseline - (BASELINE[fam]) * size, coverW: +fit.w.toFixed(2), h: size * LINE_HEIGHT,
       text: seg.text, orig: seg.text, font: fam, size, bold: !!fi.bold || !!fit.bold, italic: !!fi.italic, color: fg, bg,
     };
+    const match = seg.ocr ? null : matchPdfFont(fi.name); // upgraded to the PDF's own typeface once it has loaded (below)
     if (!seg.ocr) { const keep = detectKeep(info, a, bg); if (keep.length) a.keep = keep; } // table borders / rules inside the covered box stay visible
     this.doc.pages[pi].annots.push(a);
     this.repaint(a, pi); this.select(a, pi); this.beginEdit(a, pi, true, true);
+    if (match) this.useMatchingFont(a, pi, match, size, seg.baseline);
+  }
+
+  /** Switches an edited line to the same typeface as the PDF (Arial → Arimo, …) as soon as it is available; keeps the built-in look-alike if it never loads. */
+  async useMatchingFont(a, pi, match, size, baseline) {
+    const probe = { ...a, font: match.font, gname: match.gname };
+    const rec = await Promise.race([ensureFont(probe).catch(() => null), new Promise(r => setTimeout(() => r(null), 6000))]);
+    if (!rec || !this.doc.pages[pi]?.annots.includes(a) || a.userFont) return; // never loaded, line removed, or the person picked a font meanwhile
+    a.font = match.font; a.gname = match.gname; a.y = baseline - (await this.baseOf(a)) * size;
+    const ed = this.editing && this.editing.a === a ? this.editing : null;
+    if (ed) { const S = ed.el.style; S.fontFamily = cssFamilyFor(a); S.top = a.y + 'px'; S.fontSynthesis = 'none'; } // mid-edit: restyle in place so the caret and typing are untouched
+    else this.repaint(a, pi);
   }
 
   /* ------------------------------------------------------------ markup from text selection */
@@ -446,7 +459,7 @@ export class Annots extends EventTarget {
     const s = this.selected;
     if (s && (s.a.type === 'text' || s.a.type === 'textedit')) {
       const { a, page } = s; const old = await this.baseOf(a);
-      a.font = font; a.gname = gname || null; await ensureFont(a); const nb = await this.baseOf(a);
+      a.font = font; a.gname = gname || null; a.userFont = true; await ensureFont(a); const nb = await this.baseOf(a);
       if (a.type === 'textedit') a.y += (old - nb) * a.size; // keep the text sitting on the same baseline
       const el = this.repaint(a, page); if (a.type === 'text') a.h = Math.max(a.size * LINE_HEIGHT, el.offsetHeight || 0);
       this.paintSelection(); this.doc.checkpoint();

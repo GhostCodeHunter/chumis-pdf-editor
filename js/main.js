@@ -109,7 +109,7 @@ export const app = {
       bar.append(tab);
     });
     const dvActive = this.activeDoc;
-    $('#btn-download').hidden = !dvActive;
+    $('#btn-download').hidden = !dvActive; $('#btn-print').hidden = !dvActive;
   },
 
   /** Run a tool card: opens the screen, or the tool on the active document (asking for a file if needed). */
@@ -132,6 +132,9 @@ export const app = {
 function boot() {
   $('#btn-open').replaceChildren(icon('folder-open', 18), h('span', 'Open'));
   $('#btn-open').addEventListener('click', () => app.openDialog());
+  $('#btn-print').replaceChildren(icon('printer', 18), h('span', 'Print'));
+  $('#btn-print').title = 'Print this document (Ctrl+P)';
+  $('#btn-print').addEventListener('click', () => app.views.get(app.active)?.dv?.print());
   $('#btn-download').replaceChildren(icon('download', 18), h('span', 'Download PDF'));
   $('#btn-download').addEventListener('click', () => app.views.get(app.active)?.dv?.download());
   $('#top-install').append(installButton({ label: 'Install', kind: 'ghost' }));

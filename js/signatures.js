@@ -214,11 +214,14 @@ export async function attach(dv) {
 /* ------------------------------------------------------------------ Adobe-style signature appearance */
 const SVGNS = 'http://www.w3.org/2000/svg';
 function glyph(kind) {
-  const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '0 0 100 100'); svg.setAttribute('class', 'sig-glyph ' + kind);
-  const path = (d, c, w) => { const p = document.createElementNS(SVGNS, 'path'); p.setAttribute('d', d); p.setAttribute('fill', 'none'); p.setAttribute('stroke', c); p.setAttribute('stroke-width', w); p.setAttribute('stroke-linecap', 'round'); p.setAttribute('stroke-linejoin', 'round'); svg.append(p); };
-  if (kind === 'ok') { path('M14 54 L38 80 L88 16', '#064e1f', 21); path('M14 54 L38 80 L88 16', '#16b34a', 14); }
-  else if (kind === 'bad') { path('M20 20 L80 80 M80 20 L20 80', '#6b0a08', 21); path('M20 20 L80 80 M80 20 L20 80', '#e0231d', 14); }
-  else { path('M50 18 L50 58', '#6b4a00', 21); path('M50 18 L50 58', '#f0a400', 14); path('M50 80 L50 80.1', '#6b4a00', 21); path('M50 80 L50 80.1', '#f0a400', 14); }
+  // Acrobat's marks: a flat colour with a heavy black outline and a hard black drop shadow to the lower right.
+  const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', '-4 -4 116 116'); svg.setAttribute('class', 'sig-glyph ' + kind);
+  const pts = { ok: '1,55 14,44 33,67 82,0 100,12 40,100', bad: '12,28 28,12 50,34 72,12 88,28 66,50 88,72 72,88 50,66 28,88 12,72 34,50', warn: '50,4 99,94 1,94' }[kind];
+  const fill = { ok: '#1cb04a', bad: '#e0231d', warn: '#f5b400' }[kind];
+  const poly = (attrs, parent) => { const p = document.createElementNS(SVGNS, 'polygon'); p.setAttribute('points', pts); for (const k in attrs) p.setAttribute(k, attrs[k]); parent.append(p); };
+  const sh = document.createElementNS(SVGNS, 'g'); sh.setAttribute('transform', 'translate(6 5)'); poly({ fill: '#000', stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, sh); svg.append(sh);
+  poly({ fill, stroke: '#000', 'stroke-width': 4, 'stroke-linejoin': 'round' }, svg);
+  if (kind === 'warn') { const r = document.createElementNS(SVGNS, 'path'); r.setAttribute('d', 'M46 38h8l-1.5 30h-5zM46.5 74h7v8h-7z'); r.setAttribute('fill', '#000'); svg.append(r); }
   return svg;
 }
 
@@ -248,9 +251,9 @@ function fieldSkin(info, w, s) {
   if (!kind) return null; // “unknown” keeps the file's own “?” — which is what Acrobat shows too
   const oc = cleanedField(info, w); if (!oc) return null;
   const label = { ok: 'Signature valid', bad: 'Signature invalid', warn: 'Valid, but changed after signing' }[kind];
-  const size = Math.min(w.h * 0.78, w.w * 0.4);
-  return h('div.sig-skin', oc, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.17) + 'px' } }, label),
-    (() => { const g = glyph(kind); g.style.width = g.style.height = size + 'px'; return g; })());
+  const size = Math.min(w.h * 0.7, w.w * 0.3);
+  return h('div.sig-skin', oc, h('div.sig-label', { style: { fontSize: Math.max(5, w.h * 0.2) + 'px' } }, label),
+    (() => { const g = glyph(kind); const side = size * 1.16; g.style.width = g.style.height = side + 'px'; g.style.left = (w.w * 0.393 - size * 0.04) + 'px'; g.style.top = (w.h * 0.178 - size * 0.04) + 'px'; return g; })());
 }
 
 /* ------------------------------------------------------------------ panel */

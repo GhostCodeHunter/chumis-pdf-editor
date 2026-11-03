@@ -170,3 +170,26 @@ export function splitAtRules(info, segs) {
   }
   return out;
 }
+
+/**
+ * The PDF's own font name -> the open-source font that has the same design/metrics (Arial → Arimo, Times New Roman → Tinos, …).
+ * Returns { font: 'g:<id>', gname } for the editor's font system, or null when no close match is known.
+ */
+const FONT_MATCH = [
+  [/arialnarrow|helveticanarrow|liberationsansnarrow/i, null],
+  [/arial|helvetica|liberationsans|arimo/i, ['arimo', 'Arimo']],
+  [/timesnewroman|times|liberationserif|tinos/i, ['tinos', 'Tinos']],
+  [/couriernew|courier|liberationmono|cousine/i, ['cousine', 'Cousine']],
+  [/calibri|carlito/i, ['carlito', 'Carlito']], [/cambria|caladea/i, ['caladea', 'Caladea']], [/georgia|gelasio/i, ['gelasio', 'Gelasio']],
+  [/robotomono/i, ['roboto-mono', 'Roboto Mono']], [/robotoslab/i, ['roboto-slab', 'Roboto Slab']], [/roboto/i, ['roboto', 'Roboto']],
+  [/opensans|segoeui/i, ['open-sans', 'Open Sans']], [/^lato/i, ['lato', 'Lato']], [/montserrat/i, ['montserrat', 'Montserrat']], [/poppins/i, ['poppins', 'Poppins']],
+  [/notosans/i, ['noto-sans', 'Noto Sans']], [/notoserif/i, ['noto-serif', 'Noto Serif']], [/sourcesans/i, ['source-sans-3', 'Source Sans 3']], [/ubuntu/i, ['ubuntu', 'Ubuntu']],
+  [/^inter(-|$|regular|bold)/i, ['inter', 'Inter']], [/nunito/i, ['nunito', 'Nunito']], [/raleway/i, ['raleway', 'Raleway']], [/merriweather/i, ['merriweather', 'Merriweather']],
+  [/^lora/i, ['lora', 'Lora']], [/playfair/i, ['playfair-display', 'Playfair Display']], [/ptserif/i, ['pt-serif', 'PT Serif']], [/ebgaramond|garamond/i, ['eb-garamond', 'EB Garamond']],
+];
+export function matchPdfFont(rawName) {
+  const name = String(rawName || '').replace(/^[A-Z]{6}\+/, '').replace(/[\s_-]+/g, '');
+  if (!name) return null;
+  for (const [re, to] of FONT_MATCH) if (re.test(name)) return to ? { font: 'g:' + to[0], gname: to[1] } : null;
+  return null;
+}

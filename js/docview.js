@@ -1,5 +1,5 @@
 // The editor screen for one open document: toolbar, property bar, side panels, viewer.
-import { h, icon, button, toast, dialog, confirmDialog, popupMenu, field, select, downloadBlob, baseName, withProgress, clamp, uid } from './ui.js';
+import { h, icon, button, toast, dialog, confirmDialog, popupMenu, field, select, downloadBlob, printBlob, baseName, withProgress, clamp, uid } from './ui.js';
 import { Viewer } from './viewer.js';
 import { Annots } from './annots.js';
 import { renderToCanvas } from './pdfio.js';
@@ -384,6 +384,14 @@ export class DocView {
     this.doc.dirty = false; toast(`Saved ${name}`, 'success');
   }
 
+  /** Prints the document exactly as it would be saved (edits, signatures and stamps included). */
+  async print() {
+    const bytes = await withProgress('Preparing to print', async p => this.doc.bake({ onProgress: (f, t) => p.update(f, t) }));
+    if (!bytes) return;
+    printBlob(new Blob([bytes], { type: 'application/pdf' }));
+    toast('Opening the print dialog…', 'info', 2500);
+  }
+
   /* ------------------------------------------------------------ keyboard */
   onKey(e) {
     const t = e.target; const typing = t.matches?.('input, textarea, select') || t.isContentEditable;
@@ -392,6 +400,7 @@ export class DocView {
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this.doc.redo() : this.doc.undo(); }
     else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); this.doc.redo(); }
     else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); this.download(); }
+    else if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); this.print(); }
     else if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); this.showLeft('find'); }
     else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); this.annots.duplicateSelected(); }
     else if (mod && e.key.toLowerCase() === 'c' && this.annots.selected) { this.annots.copy(); }

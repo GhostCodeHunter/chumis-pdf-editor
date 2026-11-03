@@ -252,11 +252,11 @@ html, body { height: 100%; overflow: hidden; }
 .sig-layer { pointer-events: none; }
 .sig-badge { position: absolute; pointer-events: auto; padding: 0; border: 1.5px dashed currentColor; border-radius: 3px; background: transparent; cursor: pointer; text-align: left; transition: background-color var(--dur-2), transform var(--dur-2) var(--ease-out); animation: pop-in var(--dur-3) var(--ease-out); }
 .sig-badge:hover { background: rgba(20, 115, 230, .1); } .sig-badge.ok { color: #0f9d58; } .sig-badge.warn { color: #e08a00; } .sig-badge.bad { color: #d31510; } .sig-badge.info { color: #1473e6; }
-.sig-badge.skinned { border-style: dotted; overflow: hidden; }
+.sig-badge.skinned { border: 1px dotted #555; border-radius: 0; overflow: hidden; }
 .sig-skin { position: absolute; inset: 0; pointer-events: none; }
 .sig-skin canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.sig-label { position: absolute; left: 0; right: 0; top: 0; height: 31%; display: flex; align-items: center; padding: 0 3%; background: #fff; color: #000; white-space: nowrap; font-family: Arial, "Liberation Sans", Helvetica, sans-serif; line-height: 1; }
-.sig-glyph { position: absolute; left: 50%; top: 56%; transform: translate(-50%, -50%); filter: drop-shadow(0 0 1.5px rgba(255,255,255,.9)); animation: pop-in var(--dur-3) var(--ease-spring); }
+.sig-label { position: absolute; left: 0; right: 0; top: 0; height: 31%; display: flex; align-items: center; padding: 0 1.6%; background: #fff; color: #000; white-space: nowrap; font-family: Arial, "Liberation Sans", Helvetica, sans-serif; line-height: 1; }
+.sig-glyph { position: absolute; overflow: visible; animation: pop-in var(--dur-3) var(--ease-spring); }
 .sig-mark { position: absolute; top: -10px; left: -10px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
 .sg-head { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3); border-radius: var(--r-md); margin-bottom: var(--s-3); } .sg-head.ok { background: var(--c-success-bg); color: var(--c-success); } .sg-head.warn { background: var(--c-warn-bg); color: #6b3d00; } .sg-head.bad { background: var(--c-danger-bg); color: var(--c-danger); } .sg-head.info { background: var(--c-accent-bg); color: var(--c-accent); }
 .sg-head strong { color: var(--c-text); }

@@ -193,6 +193,14 @@ export function pickFiles({ accept = '', multiple = true } = {}) {
   });
 }
 
+/** Prints a PDF Blob through the browser's own print dialog (falls back to opening it in a tab, whose viewer has a print button). */
+export function printBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  const f = document.createElement('iframe'); f.setAttribute('aria-hidden', 'true'); f.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+  const cleanup = () => setTimeout(() => { URL.revokeObjectURL(url); f.remove(); }, 180000);
+  f.onload = () => setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch { window.open(url, '_blank'); } }, 350);
+  f.src = url; document.body.append(f); cleanup();
+}
 export function downloadBlob(blob, name) {
   const a = h('a', { href: URL.createObjectURL(blob), download: name, style: { display: 'none' } });
   document.body.append(a); a.click();
