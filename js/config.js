@@ -18,3 +18,5 @@ export const TESSERACT_LANG_PATH = '';
 export const VERIFY_PROXY_URL = '';
 
 export const MAX_UNDO = 80;
+/** Optional: URL of a revocation proxy (see tools/revocation-proxy/README.md). Lets the app fetch the CA's CRL; empty = only information inside the file is used. */
+export const REVOCATION_PROXY_URL = '';

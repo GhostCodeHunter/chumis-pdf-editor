@@ -5,18 +5,18 @@ import { inspectSignatures, parseCertFile, fingerprint, describeSigner } from '.
 import { openPdfJs, destroyPdf, renderToCanvas, canvasToBytes, PDFLib, pdfjsLib } from './pdfio.js';
 import { pageGeom } from './bake.js';
 import { renderCleanField } from './fieldmark.js';
-import { trustArgs } from './trustbundle.js';
+import { validateSignatures, onlineRevocationAvailable, onlineRevocationOn, setOnlineRevocation } from './trustbundle.js';
 
 /* ------------------------------------------------------------------ trusted certificates (stored on this device only) */
 const KEY = 'chumi.trust.v1';
 const entries = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { return []; } };
 const b64 = bytes => { let s = ''; bytes.forEach(b => (s += String.fromCharCode(b))); return btoa(s); };
 const unb64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
-export function loadTrusted() { return entries().map(e => { try { return parseCertFile(unb64(e.b64)); } catch { return null; } }).filter(Boolean); }
+export function loadTrusted() { return entries().map(e => { try { const c = parseCertFile(unb64(e.b64)); c.trustCertified = e.certified === true; return c; } catch { return null; } }).filter(Boolean); }
 export function trustList() { return entries(); }
-export async function addTrusted(cert) {
+export async function addTrusted(cert, { certified = false } = {}) {
   const fp = await fingerprint(cert.der); const list = entries().filter(e => e.fp !== fp);
-  list.push({ fp, name: cert.subject.CN || cert.subject.O || 'Certificate', issuer: cert.issuer.CN || cert.issuer.O || '', b64: b64(cert.der), added: Date.now() });
+  list.push({ fp, name: cert.subject.CN || cert.subject.O || 'Certificate', issuer: cert.issuer.CN || cert.issuer.O || '', b64: b64(cert.der), certified, added: Date.now() });
   try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { toast('Could not save the trusted certificate on this device.', 'error'); }
 }
 export function removeTrusted(fp) { try { localStorage.setItem(KEY, JSON.stringify(entries().filter(e => e.fp !== fp))); } catch {} }
@@ -41,7 +41,7 @@ export function findings(s) {
   if (s.digestOk === false) L.push(['bad', 'The document has been altered or corrupted since the signature was applied.']);
   else if (s.sigOk === false) L.push(['bad', 'The document content matches what was signed, but the signature itself does not verify against the signer’s certificate, so it cannot be relied on.']);
   else if (s.sigOk === true && s.modifiedAfter) L.push(['warn', 'The signature itself is intact, but the file was changed after it was applied (later edits or another signature). Use “Compare Signed Version to Current Version” to see what changed.']);
-  else if (s.sigOk === true) L.push(['ok', 'The document has not been modified since this signature was applied.']);
+  else if (s.sigOk === true) L.push(['ok', s.ltvOnly ? 'The document has not been modified since this signature was applied (only validation information was added afterwards).' : 'The document has not been modified since this signature was applied.']);
   else L.push(['warn', 'The signature value could not be checked.']);
   if (s.chainTrusted) L.push(['ok', s.chainBuiltin ? `The signer’s identity is valid: its certificate chain leads to ${(s.chain[s.chain.length - 1].subject.CN) || 'a trusted root'}, a root certificate built into this app (India’s Controller of Certifying Authorities).` : `The signer’s identity is valid: its certificate chain leads to a certificate you trust (${(s.chain[s.chain.length - 1].subject.CN) || 'trusted root'}).`]);
   else L.push(['warn', 'The signer’s identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.']);
@@ -51,7 +51,15 @@ export function findings(s) {
   for (const p of s.problems || []) if (!/Content was added/.test(p) && !/no longer matches/.test(p) && !/does not match/.test(p)) L.push(['warn', p]);
   L.push(['info', s.signTimeFromSignature ? 'Signing time is from the clock on the signer’s computer.' : 'Signing time is from the clock on the signer’s computer (the file’s own date field).']);
   L.push(['info', `Signature was validated as of the signing time: ${acroDate(s.signTime)}.`]);
-  L.push(['info', 'Certificate revocation (CRL / OCSP) is not checked — a browser can’t reach the issuing authority’s servers.']);
+  const rv = s.revocation, badItem = rv?.items.find(x => x.status === 'revoked');
+  if (badItem) L.push([rv.revokedBeforeSigning ? 'bad' : 'warn', `The certificate of ${badItem.name} was revoked on ${acroDate(badItem.revokedAt)}${rv.revokedBeforeSigning ? ', before this document was signed' : ', after this document was signed'}.`]);
+  else if (rv?.state === 'good') L.push(['ok', `Revocation was checked (${[...new Set(rv.items.map(x => x.source))].join(', ')}): none of the certificates in the chain is revoked.`]);
+  else L.push(['info', 'Certificate revocation was not checked: ' + (rv?.items.find(x => x.reason)?.reason || (rv?.embedded ? 'the revocation information in this file does not cover this certificate.' : 'this file carries no revocation information')) + (onlineRevocationAvailable() ? (onlineRevocationOn() ? ' and the CA’s CRL could not be used.' : ' (turn on “Check revocation online” in the Signatures panel).') : ' and a browser cannot reach the CA’s servers.')]);
+  if (s.certification) {
+    L.push(['info', `This is a certified document: ${{ 1: 'no changes are allowed', 2: 'form filling and signing are allowed', 3: 'form filling, signing and commenting are allowed' }[s.certification.p] || 'changes are restricted'}.`]);
+    if (s.modifiedAfter) L.push(['warn', 'Changes were made after it was certified. Acrobat checks whether they are permitted; this app does not analyse them, so treat the document as changed.']);
+    if (s.certTrustProblem) L.push(['warn', 'The certifying signer is not trusted for certified documents. In the certificate’s Trust tab, choose “Certified documents”.']);
+  }
   return L;
 }
 const row = ([k, t]) => h('li.sg-line.' + k, icon(k === 'ok' ? 'check-circle' : k === 'bad' ? 'x-circle' : k === 'warn' ? 'alert-circle' : 'info', 18), h('span', t));
@@ -62,7 +70,8 @@ export function validationDialog(dv, s) {
   const d = dialog({
     title: 'Signature Validation Status', width: 560,
     body: h('div.sg-status', h('div.sg-head.' + st.cls, icon(st.ic, 26), h('strong', st.head(nameOf(s)))), h('ul.sg-lines', findings(s).map(row)),
-      !s.chainTrusted && s.chain?.length ? h('p.hint', 'If you know and trust the issuer, you can add its certificate (usually the root) to your trusted list in the certificate viewer.') : null),
+      !s.chainTrusted && s.chain?.length ? h('p.hint', 'If you know and trust the issuer, you can add its certificate (usually the root) to your trusted list in the certificate viewer.') : null,
+      h('p.hint', 'This is a cryptographic check run on your device. Whether a signature is legally valid depends on its certificate authority and the law that applies; for official use, confirm with the issuer or the official portal.')),
     actions: [
       button({ label: 'Signature Properties…', onClick: () => { d.close(); propertiesDialog(dv, s); } }),
       button({ label: 'Close', kind: 'primary', onClick: () => d.close() })],
@@ -101,7 +110,7 @@ export function advancedDialog(dv, s) {
   const body = h('div.cv-body');
   const algo = (s.algorithm || '').split(' with ');
   const views = {
-    'Summary': () => dl([['Signed by', describeSigner(s.signer) || '—'], ['Hash algorithm', HASH_NAME[algo[0]] || algo[0] || '—'], ['Signature algorithm', algo[1] || '—'], ['Signature type', 'Approval signature'], ['Signature format', s.format || '—'], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—']]),
+    'Summary': () => dl([['Signed by', describeSigner(s.signer) || '—'], ['Hash algorithm', HASH_NAME[algo[0]] || algo[0] || '—'], ['Signature algorithm', algo[1] || '—'], ['Signature type', s.certification ? `Certification signature (${{ 1: 'no changes allowed', 2: 'form filling and signing allowed', 3: 'form filling, signing and commenting allowed' }[s.certification.p] || 'changes restricted'})` : 'Approval signature'], ['Signature format', s.format || '—'], ['Reason', s.info?.reason || '—'], ['Location', s.info?.location || '—']]),
     'Date/Time': () => dl([['Signing time', acroDate(s.signTime)], ['Source of the signing time', s.signTimeFromSignature ? 'The clock on the signer’s computer (signed attribute)' : 'The signature field’s date entry'], ['Validated as of', acroDate(s.signTime)], ['Document timestamp', 'None']]),
     'Legal': () => h('p.hint', 'No legal notice or certification restrictions were found in this signature.'),
   };
@@ -114,14 +123,15 @@ export function advancedDialog(dv, s) {
 function trustDialog(dv, c, done) {
   const root = h('input', { type: 'checkbox', checked: true, id: 'tr-root' });
   const signed = h('input', { type: 'checkbox', checked: true, disabled: true, id: 'tr-signed' });
+  const cert = h('input', { type: 'checkbox', id: 'tr-cert' });
   const fp = h('code.hint', '…'); fingerprint(c.der, 'SHA-256').then(v => (fp.textContent = v));
   const d = dialog({
     title: 'Import Contact Settings', width: 560,
     body: h('div', dl([['Subject', describeSigner({ subject: c.subject })], ['Issuer', c.selfSigned ? 'Same as subject (self-signed)' : describeSigner({ subject: c.issuer })], ['Valid to', fmtDay(c.notAfter)], ['SHA-256 fingerprint', fp]]),
       h('h4.sg-sub', 'Trust'), h('label.cv-check', root, h('span', 'Use this certificate as a trusted root')),
-      h('p.hint', 'If signature validation succeeds, trust this certificate for:'), h('label.cv-check', signed, h('span', 'Signed documents or data')),
+      h('p.hint', 'If signature validation succeeds, trust this certificate for:'), h('label.cv-check', signed, h('span', 'Signed documents or data')), h('label.cv-check', cert, h('span', 'Certified documents')),
       h('p.hint', 'Only trust a certificate whose fingerprint you have confirmed with the issuer. India’s CCA roots are already built in.')),
-    actions: [button({ label: 'Cancel', onClick: () => d.close() }), button({ label: 'OK', kind: 'primary', onClick: async () => { d.close(); if (root.checked) { await addTrusted(c); toast('Certificate added to your trusted identities.', 'success'); } done && done(); } })],
+    actions: [button({ label: 'Cancel', onClick: () => d.close() }), button({ label: 'OK', kind: 'primary', onClick: async () => { d.close(); if (root.checked) { await addTrusted(c, { certified: cert.checked }); toast('Certificate added to your trusted identities.', 'success'); } done && done(); } })],
   });
 }
 
@@ -136,7 +146,8 @@ export async function certificateDialog(dv, s) {
   const views = {
     'Summary': async c => dl([['Subject', label(c)], ['Issuer', c.selfSigned ? label(c) : (c.issuer.CN || c.issuer.O || '—')], ['Valid from', acroDate(c.notBefore)], ['Valid to', acroDate(c.notAfter)], ['Intended usage', c.keyUsage.join(', ') || '—'], ['Certificate authority', c.isCA ? 'Yes' : 'No']]),
     'Details': async c => dl([['Version', 'V' + c.version], ['Serial number', c.serial.toUpperCase()], ['Signature algorithm', sigName(c.sigAlg)], ['Issuer', c.selfSigned ? 'Same as subject (self-signed)' : nm(c.issuer)], ['Valid from', acroDate(c.notBefore)], ['Valid to', acroDate(c.notAfter)], ['Subject', nm(c.subject)], ['Public key', c.keyAlg === '1.2.840.113549.1.1.1' ? `RSA (${c.keyBits} bits)` : c.keyAlg], ['Key usage', c.keyUsage.join(', ') || '—'], ['SHA-1 digest', await fingerprint(c.der, 'SHA-1')], ['SHA-256 digest', await fingerprint(c.der, 'SHA-256')]]),
-    'Revocation': async c => h('div', h('p', icon('info', 14), ' Revocation checking was not performed. A web browser cannot reach the certificate authority’s servers, so CRL and OCSP answers are not consulted.'),
+    'Revocation': async c => h('div', h('p', icon('info', 14), ' Revocation is checked from the CRL and OCSP information carried inside the file. A web browser cannot reach the certificate authority’s servers on its own' + (onlineRevocationAvailable() ? '; this site can fetch the CA’s CRL through its revocation proxy (switch in the Signatures panel).' : '.')),
+      s.revocation?.items.length ? h('div', h('h4.sg-sub', 'Result for this signature'), dl(s.revocation.items.map(x => [x.name, x.status === 'good' ? `Not revoked (${x.source}${x.thisUpdate ? ', information from ' + acroDate(x.thisUpdate) : ''})` : x.status === 'revoked' ? `REVOKED on ${acroDate(x.revokedAt)} (${x.source})` : `Not checked — ${x.reason || 'no information'}`]))) : null,
       dl([['CRL distribution points', c.crlUrls.join('\n') || 'None listed'], ['OCSP responder', c.ocspUrls.join('\n') || 'None listed'], ['Issuer certificate', c.caIssuerUrls.join('\n') || 'None listed']]), h('p.hint', 'As in Acrobat, revocation is not checked on or above a trust anchor.')),
     'Trust': async c => {
       const mine = await isTrusted(c), built = !!c.builtin, i = chain.indexOf(c), anchor = s.chainTrusted && i === s.chain.length - 1;
@@ -232,12 +243,12 @@ async function findWidgets(dv, sigs) {
 
 export async function attach(dv) {
   const doc = dv.doc; if (doc.originalBytes !== doc.bytes) return;
-  let sigs; try { sigs = await inspectSignatures(doc.originalBytes, await trustArgs(loadTrusted())); } catch (e) { console.warn(e); return; }
+  let sigs; try { sigs = await validateSignatures(doc.originalBytes, loadTrusted()); } catch (e) { console.warn(e); return; }
   doc.sigs = sigs;
   const api = dv.sigApi = {
     sigs,
     clear() { dv.sigBarEl.hidden = true; dv.sigBarEl.replaceChildren(); dv.viewer.pages.forEach(p => p.sigEl.replaceChildren()); dv.railEl.querySelector('[data-id=signatures]')?.classList.remove('has-badge'); doc.sigs = []; },
-    async revalidate() { doc.sigs = api.sigs = await inspectSignatures(doc.originalBytes, await trustArgs(loadTrusted())); try { await findWidgets(dv, api.sigs); } catch {} render(); dv.panelApi?.refresh?.(); },
+    async revalidate() { doc.sigs = api.sigs = await validateSignatures(doc.originalBytes, loadTrusted()); try { await findWidgets(dv, api.sigs); } catch {} render(); dv.panelApi?.refresh?.(); },
     render: () => render(),
   };
   if (!sigs.length) return;
@@ -402,8 +413,11 @@ export function mountPanel(dv, el) {
       if (ok) { await addTrusted(c); await dv.sigApi?.revalidate(); draw(); toast('Certificate added to your trusted list.', 'success'); } }
     catch (e) { toast('That file is not a readable certificate (.cer, .crt, .der or .pem).', 'error', 6000); }
   } });
+  const revSec = h('div.panel-sec', h('h3', 'Revocation'), h('p.hint', 'Revocation is checked from the CRL / OCSP information stored in the file, as Acrobat does for documents without a network connection.'),
+    onlineRevocationAvailable() ? h('label.cv-check', h('input', { type: 'checkbox', checked: onlineRevocationOn(), onchange: async e => { setOnlineRevocation(e.target.checked); await dv.sigApi?.revalidate(); draw(); } }), h('span', 'Check revocation online')) : null,
+    onlineRevocationAvailable() ? h('p.hint', 'Fetches the issuing CA’s revocation list through this site’s revocation proxy. The proxy sees which CA address is requested, never your document.') : h('p.hint', 'Online checking needs a revocation proxy (a browser cannot contact CA servers directly); the site owner can enable it — see tools/revocation-proxy.'));
   el.append(dv.panelHeader('Digital signatures', 'Validate who signed this document and whether it changed.'),
-    h('div.panel-b', list,
+    h('div.panel-b', list, revSec,
       h('div.panel-sec', h('h3', 'Trusted certificates'), h('p.hint', 'Like Acrobat, a signature is “valid” only when its certificate chain leads to a certificate that is trusted. India’s CCA roots are built in; add any other authority yourself. Indian signatures chain to the Root CA of India (CCA); download its root certificate from cca.gov.in and import it here once.'), trust, importBtn,
         h('a.btn.btn-ghost.btn-sm', { href: 'https://cca.gov.in/root_certificate.html', target: '_blank', rel: 'noopener noreferrer' }, icon('external', 16), h('span', 'CCA India root certificates'))),
       h('div.note-box', icon('lock', 16), h('span', 'Trusted certificates are saved only in this browser. Validation happens on your device; revocation lists are not consulted.'))));

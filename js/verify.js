@@ -5,7 +5,7 @@ import { pageLines } from './extract.js';
 import { scanText, aadhaarMaskBoxes, TYPES, PORTALS, DOC_LABELS, clean } from './validators.js';
 import { inspectSignatures, describeSigner } from './sigcheck.js';
 import { loadTrusted, validationDialog, STATUS } from './signatures.js';
-import { trustArgs } from './trustbundle.js';
+import { validateSignatures } from './trustbundle.js';
 import { VERIFY_PROXY_URL } from './config.js';
 
 const fmtDate = d => (d ? d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—');
@@ -39,7 +39,7 @@ export function mountPanel(dv, el) {
         try { const { runOcr } = await import('./ocr.js'); await runOcr(doc, [...Array(Math.min(doc.numPages, 6)).keys()], { langs: ['eng', 'hin'], scale: 3, onProgress: (f, t) => p2.update(f, t) }); doc.pages.forEach((_, i) => dv.viewer.invalidate(i)); pages = await gatherText(p2); }
         catch (e) { toast(e.message || 'OCR failed', 'error', 8000); return; } finally { p2.close(); }
       }
-      sigs = await inspectSignatures(doc.originalBytes, await trustArgs(loadTrusted()));
+      sigs = await validateSignatures(doc.originalBytes, loadTrusted());
     } catch (e) { console.error(e); toast('Scan failed: ' + e.message, 'error'); return; }
     finally { try { p.close(); } catch {} }
     last = { scan: scanText(pages), sigs, pages }; render();

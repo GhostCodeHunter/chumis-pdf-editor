@@ -42,8 +42,9 @@
 <h2>2. Digital-signature validation</h2>
 <ul>
 <li>The validator recomputes the signed fingerprint of the document and checks the signer's RSA signature. If either fails, the document or signature was changed.</li>
-<li>It builds the certificate chain from the file. A signature is shown as <strong>valid</strong> only when the chain ends at a certificate that <em>you</em> have chosen to trust. Importing a certificate is your decision — confirm its thumbprint with the issuer first.</li>
-<li><strong>Not checked:</strong> certificate revocation (CRL/OCSP), trusted timestamps, long-term-validation data, and whether later changes were permitted by the signer.</li>
+<li>It builds the certificate chain from the file. A signature is shown as <strong>valid</strong> only when the chain ends at a trusted certificate: India's CCA roots and licensed authorities are built in (checked against the fingerprints the CCA publishes), and you can add others. Adding a certificate is your decision — confirm its thumbprint with the issuer first.</li>
+<li><strong>Revocation</strong> is checked only from the CRL/OCSP data stored inside the file, and from the authority's CRL if the site owner has switched on the optional revocation proxy. Without either, revocation is not checked. <strong>Not checked:</strong> the validity of trusted timestamps, and whether later changes to a certified document were permitted (the tool reports that changes exist).</li>
+<li>A “valid” result is a cryptographic check that the signed content is unchanged and was signed by a certificate chaining to a trusted root. It is not proof of the signer's authority or of legal validity. For legal or official use, confirm with the issuing authority or the official portal.</li>
 <li>Whether an electronic signature is legally valid depends on the law, the certifying authority and the circumstances. This tool gives no legal opinion.</li>
 </ul>
 

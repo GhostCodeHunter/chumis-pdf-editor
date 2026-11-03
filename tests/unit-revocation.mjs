@@ -1,0 +1,20 @@
+// CRL and OCSP checking against real openssl output.   node tests/unit-revocation.mjs DIR
+import { readFileSync } from 'node:fs';
+import { parseCertFile } from '../js/sigcheck.js';
+import { checkCrl, checkOcsp, evaluateRevocation } from '../js/revocation.js';
+const dir = process.argv[2] || '/tmp/rev'; const rd = f => new Uint8Array(readFileSync(dir + '/' + f));
+const ca = parseCertFile(rd('ca.pem')), good = parseCertFile(rd('good.pem')), bad = parseCertFile(rd('bad.pem'));
+let fail = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fail++; };
+const now = new Date();
+ok((await checkCrl(good, ca, rd('ca.crl'), now)).status === 'good', 'CRL: good certificate is not revoked');
+const rb = await checkCrl(bad, ca, rd('ca.crl'), now); ok(rb.status === 'revoked' && rb.revokedAt instanceof Date, 'CRL: revoked certificate is reported revoked, with the date');
+ok((await checkCrl(good, ca, rd('ca.crl'), new Date(now.getTime() + 30 * 86400e3))).status === 'unknown', 'CRL: an expired CRL is not trusted');
+const other = parseCertFile(rd('good.pem')); ok((await checkCrl(good, other, rd('ca.crl'), now)).status === 'unknown', 'CRL: a CRL from another issuer is rejected');
+const tampered = rd('ca.crl'); tampered[tampered.length - 5] ^= 0xff; ok((await checkCrl(good, ca, tampered, now)).status === 'unknown', 'CRL: a tampered CRL is rejected');
+ok((await checkOcsp(good, ca, rd('good.ocsp'), now)).status === 'good', 'OCSP: good');
+ok((await checkOcsp(bad, ca, rd('bad.ocsp'), now)).status === 'revoked', 'OCSP: revoked');
+ok(await checkOcsp(bad, ca, rd('good.ocsp'), now) === null, 'OCSP: a response about another certificate is ignored');
+const ev = await evaluateRevocation([good, ca], 1, { crls: [rd('ca.crl')], ocsps: [] }, now); ok(ev.state === 'good', 'chain: good via CRL, CA is the trust anchor and is not checked');
+const ev2 = await evaluateRevocation([bad, ca], 1, { crls: [], ocsps: [rd('bad.ocsp')] }, now); ok(ev2.state === 'revoked' && ev2.revokedBeforeSigning === true, 'chain: revoked via OCSP, revoked before the signing time → the signature cannot be relied on');
+const ev3 = await evaluateRevocation([good, ca], 1, { crls: [], ocsps: [] }, now); ok(ev3.state === 'unchecked', 'chain: nothing embedded → unchecked');
+process.exit(fail ? 1 : 0);

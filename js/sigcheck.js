@@ -40,6 +40,7 @@ const HASHES = { '1.3.14.3.2.26': 'SHA-1', '2.16.840.1.101.3.4.2.1': 'SHA-256', 
 const canonName = n => n.children.map(rdn => rdn.children.map(atv => oidOf(atv.children[0]) + '=' + strOf(atv.children[1]).trim().replace(/\s+/g, ' ').toLowerCase()).sort().join('+')).join(',');
 const stripZ = b => { let i = 0; while (i < b.length - 1 && b[i] === 0) i++; return b.subarray(i); };
 const octetsOf = n => { if (!n) return null; if (!n.constructed) return valOf(n); const parts = n.children.map(octetsOf); const out = new Uint8Array(parts.reduce((a, q) => a + q.length, 0)); let o = 0; for (const q of parts) { out.set(q, o); o += q.length; } return out; };
+export const asn1 = { parse, rawOf, valOf, oidOf, timeOf, eq, strOf, HASHES };
 const hex = b => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 
 export function parseCert(n) {
@@ -82,10 +83,10 @@ async function certSignedBy(cert, issuer) {
 /** Builds the certificate chain from the signer up to a certificate the user trusts (or as far as the file allows). */
 export async function buildChain(signer, embedded, trusted) {
   const fp = async c => (c._fp ||= await fingerprint(c.der));
-  const trustedFps = new Set(await Promise.all(trusted.map(fp)));
+  const trustedByFp = new Map(); for (const t of trusted) trustedByFp.set(await fp(t), t); const trustedFps = { has: k => trustedByFp.has(k) };
   const chain = [signer]; const problems = []; let cur = signer; let trustedAt = -1; let complete = false;
   for (let depth = 0; depth < 8; depth++) {
-    if (trustedFps.has(await fp(cur))) { trustedAt = chain.length - 1; complete = true; break; }
+    if (trustedFps.has(await fp(cur))) { chain[chain.length - 1] = trustedByFp.get(await fp(cur)); trustedAt = chain.length - 1; complete = true; break; } // the trusted copy (it carries the trust flags), not the one embedded in the file
     if (cur.selfSigned) { const ok = await certSignedBy(cur, cur); if (ok === false) problems.push(`The root certificate “${cur.subject.CN || cur.subject.O}” has an invalid self-signature.`); complete = true; break; }
     let issuer = null, from = '';
     for (const c of embedded) if (c !== cur && c.isCA && eq(c.subjectRaw, cur.issuerRaw) && await certSignedBy(cur, c) !== false) { issuer = c; from = 'file'; break; } // only a CA certificate may vouch for another
@@ -109,6 +110,13 @@ function pdfString(txt, key) {
 }
 function pdfDate(s) { const m = /D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?([Z+-])?(\d{2})?'?(\d{2})?/.exec(s || ''); if (!m) return null; const off = m[7] === '+' ? -1 : m[7] === '-' ? 1 : 0; return new Date(Date.UTC(+m[1], (m[2] || 1) - 1, m[3] || 1, +(m[4] || 0) + off * +(m[8] || 0), +(m[5] || 0) + off * +(m[9] || 0), m[6] || 0)); }
 
+/** True when everything appended after a signature is long-term-validation data (a /DSS with CRLs, OCSP responses, certificates) and nothing else. */
+function ltvOnlyUpdate(tail) {
+  const objs = [...tail.matchAll(/(\d+)\s+0\s+obj\b([\s\S]*?)\bendobj/g)]; if (!objs.length || !/\/DSS\b/.test(tail)) return false;
+  const refs = new Set(); for (const m of tail.matchAll(/\/(?:CRLs|OCSPs|Certs)\s*\[([^\]]*)\]/g)) for (const r of m[1].matchAll(/(\d+)\s+0\s+R/g)) refs.add(r[1]);
+  for (const [, num, body] of objs) if (!(refs.has(num) || /\/CRLs|\/OCSPs|\/Certs|\/VRI|\/Type\s*\/Catalog|\/Type\s*\/DSS/.test(body))) return false;
+  return true;
+}
 export async function inspectSignatures(bytes, { trusted = [], pool = [] } = {}) {
   const text = latin(bytes); const out = []; const re = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/g; let m, idx = 0;
   while ((m = re.exec(text))) {
@@ -117,8 +125,10 @@ export async function inspectSignatures(bytes, { trusted = [], pool = [] } = {})
       const win = text.slice(Math.max(0, m.index - 2500), m.index + 2500);
       r.info = { name: pdfString(win, 'Name'), reason: pdfString(win, 'Reason'), location: pdfString(win, 'Location'), contact: pdfString(win, 'ContactInfo'), filter: (/\/SubFilter\s*\/([\w.]+)/.exec(win) || [])[1] || '' };
       r.info.when = pdfDate(pdfString(win, 'M'));
+      const dm = /\/TransformMethod\s*\/DocMDP[\s\S]{0,300}?\/P\s+(\d)|\/P\s+(\d)[\s\S]{0,300}?\/TransformMethod\s*\/DocMDP/.exec(win); r.certification = dm ? { p: +(dm[1] || dm[2]) } : null; // a certification signature (DocMDP) and the changes it allows
       if (b0 !== 0 || b1 <= 0 || b2 < b1 || b2 + b3 > bytes.length + 2) { r.problems.push('The signed byte range is invalid.'); out.push(r); continue; }
       r.coversWholeFile = bytes.length - (b2 + b3) <= 2 || eq(bytes.subarray(b2 + b3), new Uint8Array(bytes.length - b2 - b3).fill(10)) ;
+      if (!r.coversWholeFile && ltvOnlyUpdate(text.slice(b2 + b3))) { r.ltvOnly = true; r.coversWholeFile = true; }   // only validation information (DSS: CRLs, OCSP, certificates) was added afterwards, as Acrobat does for LTV
       if (!r.coversWholeFile) r.problems.push('Content was added to the file after this signature was applied (e.g. a later signature or an edit).');
       const gap = latin(bytes.subarray(b1, b2)); const hm = /<([0-9A-Fa-f\s]+)>/.exec(gap); if (!hm) { r.problems.push('The signature data could not be found.'); out.push(r); continue; }
       const hs = hm[1].replace(/\s/g, ''); const der = new Uint8Array(hs.length / 2 | 0); for (let k = 0; k < der.length; k++) der[k] = parseInt(hs.substr(k * 2, 2), 16);
@@ -177,8 +187,13 @@ async function verifyCms(der, bytes, [b0, b1, b2, b3], r) {
   const hashName = pss ? pssParams(sigAlgNode).hash : HASHES[digestOid];
   r.algorithm = `${HASHES[digestOid] || digestOid} with ${sigAlgOid.startsWith('1.2.840.113549.1.1') ? (pss ? 'RSA-PSS' : 'RSA') : sigAlgOid}`;
   r.format = r.info.filter || ''; r.certs = certs;
-  // signing time
-  if (attrs) for (const a of attrs.children) if (oidOf(a.children[0]) === '1.2.840.113549.1.9.5') r.signTime = timeOf(a.children[1].children[0]);
+  // signing time, and revocation information archived by the signer (Adobe's adbe-revocationInfoArchival attribute)
+  r.embeddedRevocation = { crls: [], ocsps: [] };
+  if (attrs) for (const a of attrs.children) {
+    const id = oidOf(a.children[0]);
+    if (id === '1.2.840.113549.1.9.5') r.signTime = timeOf(a.children[1].children[0]);
+    if (id === '1.2.840.113583.1.1.8') { try { for (const part of a.children[1].children[0].children) { const list = part.children[0]; if (part.tag === 0xa0) for (const x of list.children) r.embeddedRevocation.crls.push(new Uint8Array(rawOf(x))); if (part.tag === 0xa1) for (const x of list.children) r.embeddedRevocation.ocsps.push(new Uint8Array(rawOf(x))); } } catch {} }
+  }
   r.signTimeFromSignature = !!r.signTime;
   r.signTime = r.signTime || r.info.when || null;
   // digest of the signed bytes
@@ -228,4 +243,6 @@ async function finishTrust(r, trusted, pool = []) {
   else if (r.chainTrusted && !r.expired) r.status = 'valid';
   else r.status = 'unknown';
   r.modifiedAfter = r.coversWholeFile === false;
+  // a certification signature needs a signer trusted FOR CERTIFYING (built-in roots are; certificates you added are only if you ticked “Certified documents”)
+  if (r.certification && r.status === 'valid') { const anchor = r.chain[r.chain.length - 1]; if (!(anchor && (anchor.builtin || anchor.trustCertified))) { r.status = 'unknown'; r.certTrustProblem = true; } }
 }

@@ -12,9 +12,9 @@ def run(*a, **k): return subprocess.run(a, check=True, capture_output=True, **k)
 tmp = tempfile.mkdtemp()
 P = lambda n: os.path.join(tmp, n)
 
-def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b'', appearance=False, vector_q=False):
+def pdf_with_placeholder(siglen, subfilter='adbe.pkcs7.detached', extra=b'', appearance=False, vector_q=False, docmdp=0):
     body = base + (b'\n' if not base.endswith(b'\n') else b'')
-    sig = (f'{sig_num} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /{subfilter} /ByteRange [0 0000000000 0000000000 0000000000] /Contents <').encode() + b'0' * siglen + b'> /M (D:20260919174500+05\'30\') /Name (DS Test) /Reason (Testing) >>\nendobj\n'
+    sig = (f'{sig_num} 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /{subfilter} {('/Reference [ << /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P %d /V /1.2 >> >> ]' % docmdp) if docmdp else ''} /ByteRange [0 0000000000 0000000000 0000000000] /Contents <').encode() + b'0' * siglen + b'> /M (D:20260919174500+05\'30\') /Name (DS Test) /Reason (Testing) >>\nendobj\n'
     ap_num = widget_num + 1
     widget = f'{widget_num} 0 obj\n<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /V {sig_num} 0 R /Rect [60 560 330 640] /F 132 /P 4 0 R {"/AP << /N " + str(ap_num) + " 0 R >>" if appearance else ""} >>\nendobj\n'.encode()
     if appearance:   # the layout many Indian government signers use: a "Signature Not Verified" line, a yellow ? and the signer text
@@ -56,8 +56,8 @@ def cms(content_path, *flags):
     run('openssl','cms','-sign','-binary','-in',content_path,'-signer',lc,'-inkey',lk,'-certfile',chain,'-outform','DER','-out',P('sig.der'),*flags)
     return open(P('sig.der'),'rb').read()
 
-def emit(name, subfilter, builder, siglen=16384, appearance=False, vector_q=False):
-    full, i, j = pdf_with_placeholder(siglen, subfilter, appearance=appearance, vector_q=vector_q)
+def emit(name, subfilter, builder, siglen=16384, appearance=False, vector_q=False, docmdp=0):
+    full, i, j = pdf_with_placeholder(siglen, subfilter, appearance=appearance, vector_q=vector_q, docmdp=docmdp)
     content = full[:i] + full[j:]; open(P('content.bin'),'wb').write(content)
     der = builder(content); hx = der.hex().encode(); assert len(hx) <= siglen - 2, (name, len(hx))
     signed = full[:i+1] + hx + b'0' * (siglen - len(hx)) + full[j-1:]; assert len(signed) == len(full)
@@ -66,6 +66,7 @@ def emit(name, subfilter, builder, siglen=16384, appearance=False, vector_q=Fals
 emit('detached-sha256',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'))
 emit('appearance-adobe', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), appearance=True)
 emit('appearance-vector', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), appearance=True, vector_q=True)
+emit('certified-p2', 'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256'), docmdp=2)
 emit('detached-sha1',    'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha1'))
 emit('detached-sha512',  'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha512'))
 emit('stream-ber',       'adbe.pkcs7.detached', lambda c: cms(P('content.bin'), '-md', 'sha256', '-stream'))

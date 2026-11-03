@@ -145,3 +145,9 @@ Signatures on Indian government documents (GST, e-Aadhaar, e-Mudhra, ...) valida
 The older (expired) roots were cross-checked as byte-identical in two independent sources and match the names and validity listed on cca.gov.in. Every other certificate is kept only if its signature chain verifies up to one of these roots. Certificate revocation (CRL/OCSP) is not consulted, because a browser cannot reach the CAs' servers. You can still add your own trusted certificates in the Signatures panel.
 
 Password-protected signed files (e-Aadhaar, e-PAN) are checked on their original bytes, as Acrobat does, so open them with the password and the result appears at once. Older Adobe signature styles (`adbe.pkcs7.sha1`, as used by several state portals), RSA-PSS and signatures whose signer certificate is named by key id are supported. Printing draws the validation result into the print copy only; locked files are printed from their page pictures.
+
+## Revocation and certified documents
+
+- **Revocation** is checked like Acrobat does it offline: from the CRL / OCSP data the signer stored in the signature or the PDF's `/DSS` (long-term validation). A certificate revoked before the signing time makes the signature invalid. Validation information added to a file after signing (LTV) is not counted as a change.
+- **Live CRL checking** needs a small proxy because browsers cannot reach CA servers: deploy `tools/revocation-proxy/worker.js` and set `REVOCATION_PROXY_URL` in `js/config.js`. Users then get a "Check revocation online" switch (off by default).
+- **Certified documents (DocMDP)** are detected with their permission level. A certifying signer must be trusted for certifying: the built-in CCA roots are; certificates you add are only if you tick "Certified documents" in "Add to Trusted Identities". Changes after certification are reported, not analysed.
